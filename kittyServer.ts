@@ -27,12 +27,22 @@ const server = new Server(HOST, PORT);
 
 server.app.use(
     cors({
-        origin: "https://kittycrypto.gg",
-        methods: ["GET", "POST", "DELETE"],
-        allowedHeaders: ["Content-Type", "Authorization"],
-        credentials: true,
+      origin: (origin, callback) => {
+        const allowedOrigins = [
+          "https://kittycrypto.gg",
+          "https://test.kittycrypto.gg"
+        ];
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("Not allowed by CORS"));
+        }
+      },
+      methods: ["GET", "POST", "DELETE"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+      credentials: true,
     })
-);
+  );
 
 // Session store to track active sessions
 const sessionTokens = new Set<string>();

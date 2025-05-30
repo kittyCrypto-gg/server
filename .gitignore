@@ -1,3 +1,5 @@
 # Ignore user data
 chat.json
 comments.json
+# Ignore ./blockchain
+blockchain/
