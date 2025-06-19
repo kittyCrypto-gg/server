@@ -3,6 +3,7 @@ import path from "path";
 import matter from "gray-matter";
 import { Feed } from "feed";
 import * as fs from "fs/promises";
+import cors from "cors";
 
 interface LocalPost {
     title: string;
@@ -25,6 +26,11 @@ class RssServerLocal extends RssServer {
     constructor(host: string, port?: number) {
         super(host, port);
         this.registerLocalBlogRoute();
+
+        this.app.use(cors({
+            origin: 'https://kittycrypto.gg',
+            methods: ['GET'],
+        }));
     }
 
     private async loadLocalPosts(): Promise<LocalPost[]> {
