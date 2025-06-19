@@ -3,3 +3,5 @@ chat.json
 comments.json
 # Ignore ./blockchain
 blockchain/
+# Ignore ./blogposts
+blogposts/

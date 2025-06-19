@@ -4,7 +4,7 @@
         <title>RSS for https://www.bnbchain.org/en/blog/</title>
         <link>https://www.bnbchain.org/en/blog/</link>
         <description>RSS feed dynamically generated from https://www.bnbchain.org/en/blog/</description>
-        <lastBuildDate>Wed, 26 Feb 2025 16:25:09 GMT</lastBuildDate>
+        <lastBuildDate>Thu, 19 Jun 2025 13:59:29 GMT</lastBuildDate>
         <docs>https://validator.w3.org/feed/docs/rss2.html</docs>
         <generator>https://github.com/jpmonette/feed</generator>
         <copyright>All Rights Reserved, 2025</copyright>
@@ -112,6 +112,90 @@
             <guid>https://www.bnbchain.org/en/blog/ama-recap-exploring-the-future-of-ai-agents-on-bnb-chain-revox-edition</guid>
             <pubDate>Wed, 01 Jan 2025 00:00:00 GMT</pubDate>
             <description><![CDATA[Q1. Please introduce yourself and REVOX.I am Elia, Community manager of REVOX. REVOX is a modular onchain AI network, committed to building AI Agent infrastructure, providing developers and users with...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[The New BNB Chain Martians Program Is Live And Open For Applications - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/the-new-bnb-chain-martians-program-is-live-and-open-for-applications</link>
+            <guid>https://www.bnbchain.org/en/blog/the-new-bnb-chain-martians-program-is-live-and-open-for-applications</guid>
+            <pubDate>Wed, 01 Jan 2025 00:00:00 GMT</pubDate>
+            <description><![CDATA[Learn → Lead → Launch.Welcome to the BNB Martians Program 2025, the official advocate initiative by BNB Chain, designed for those who don’t just want to follow the Web3 revolution, but shape it.Whethe...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[Access-Fi on BNB Chain: A New Branch of Social-Fi for Web3 Content Monetization - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/access-fi-on-bnb-chain-a-new-branch-of-social-fi-for-web3-content-monetization</link>
+            <guid>https://www.bnbchain.org/en/blog/access-fi-on-bnb-chain-a-new-branch-of-social-fi-for-web3-content-monetization</guid>
+            <pubDate>Sun, 01 Oct 2023 00:00:00 GMT</pubDate>
+            <description><![CDATA[Web3 is undergoing a paradigm shift: access is becoming valued.On BNB Chain, a new, unique wave of projects built around the Access-Fi thesis—short for "Access + Finance"—is redefining how creators, K...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[Newest dApps on BNB Chain  (June 3 - June 9) - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/newest-dapps-on-bnb-chain-june-3-june-9</link>
+            <guid>https://www.bnbchain.org/en/blog/newest-dapps-on-bnb-chain-june-3-june-9</guid>
+            <pubDate>Tue, 03 Oct 2023 00:00:00 GMT</pubDate>
+            <description><![CDATA[Every week, new builders join BNB Chain—spanning DeFi, AI, DeSoc, Web3 gaming, memes, and more.Scroll through the latest projects below. If something grabs your attention, give them a follow. We’ll ke...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[BNB Super Meetup is Coming to New York City @ Permissionless - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/bnb-super-meetup-is-coming-to-new-york-city-permissionless</link>
+            <guid>https://www.bnbchain.org/en/blog/bnb-super-meetup-is-coming-to-new-york-city-permissionless</guid>
+            <pubDate>Sun, 25 Jun 2023 21:30:00 GMT</pubDate>
+            <description><![CDATA[Connect. Build. Grow.Builders, founders, and Web3 community, get ready! We’re heading to New York for a special BNB Super Meetup at Permissionless and you're invited. Here’s what you need to know:Date...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[Congratulations to the latest BNB Hack Winners- June 12 Batch - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/congratulations-to-the-latest-bnb-hack-winners-june-12-batch</link>
+            <guid>https://www.bnbchain.org/en/blog/congratulations-to-the-latest-bnb-hack-winners-june-12-batch</guid>
+            <pubDate>Wed, 18 Jun 2025 00:00:00 GMT</pubDate>
+            <description><![CDATA[BNB Hack continues to support AI, DeSoc, DeSci & DePIN and Web3 through ongoing evaluations and tiered rewards. Since its launch, the initiative has attracted hundreds of submissions from global build...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[BNB Chain Opens the First Builder Bunker in NYC: Your Basecamp for Building on BNB Chain - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/builder-bunker-your-basecamp-for-building-on-bnb-chain</link>
+            <guid>https://www.bnbchain.org/en/blog/builder-bunker-your-basecamp-for-building-on-bnb-chain</guid>
+            <pubDate>Wed, 26 Feb 2025 14:30:00 GMT</pubDate>
+            <description><![CDATA[TL;DRWhat: An IRL builder hub, run by BNB Chain and YZi Labs, for projects building on BNB ChainWhere: New York CityWho: Devs, founders, and teams committed to BNB ChainWhy: Co-working, community, off...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[Newest dApps on BNB Chain (May 27 - June 2) - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/newest-dapps-on-bnb-chain-may-27-june-2</link>
+            <guid>https://www.bnbchain.org/en/blog/newest-dapps-on-bnb-chain-may-27-june-2</guid>
+            <pubDate>Tue, 03 Oct 2023 00:00:00 GMT</pubDate>
+            <description><![CDATA[Every week, new builders join BNB Chain—spanning DeFi, AI, DeSoc, Web3 gaming, memes, and more.Scroll through the latest projects below. If something grabs your attention, give them a follow. We’ll ke...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[BNB Chain Weekly Ecosystem Report (May 27 - June 2) - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/bnb-chain-weekly-ecosystem-report-may-27-june-2</link>
+            <guid>https://www.bnbchain.org/en/blog/bnb-chain-weekly-ecosystem-report-may-27-june-2</guid>
+            <pubDate>Fri, 02 Jun 2023 00:00:00 GMT</pubDate>
+            <description><![CDATA[Another packed week on BNB Chain. From key metrics to ecosystem milestones, here’s your weekly snapshot—featuring the latest in DeFi, AI, Payments, DeSoc, and more. Dive into the top data, biggest upd...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[Use Case: Securitize and VanEck Bring VBILL On-Chain To Unlock Tokenized Treasuries on BNB Chain - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/use-case-securitize-and-vaneck-bring-vbill-on-chain-to-unlock-tokenized-treasuries-on-bnb-chain</link>
+            <guid>https://www.bnbchain.org/en/blog/use-case-securitize-and-vaneck-bring-vbill-on-chain-to-unlock-tokenized-treasuries-on-bnb-chain</guid>
+            <pubDate>Thu, 19 Jun 2025 13:59:28 GMT</pubDate>
+            <description><![CDATA[Securitize, a leading platform for tokenizing real-world assets (RWAs), has integrated with BNB Chain in a major milestone for real-world asset adoption. This integration enables qualified investors t...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[BNB Hack Expands:  Now Featuring AI, DeSoc, DeSci & DePIN Tracks - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/bnb-hack-expands-now-featuring-ai-desoc-desci-depin-tracks</link>
+            <guid>https://www.bnbchain.org/en/blog/bnb-hack-expands-now-featuring-ai-desoc-desci-depin-tracks</guid>
+            <pubDate>Wed, 11 Oct 2023 00:00:00 GMT</pubDate>
+            <description><![CDATA[Following the enthusiastic response to our BNB AI Hack and the valuable feedback from developers building across different sectors, we’re evolving the BNB AI Hack into a broader BNB Hack.This continuo...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[Newest dApps on BNB Chain (May 20 - 26) - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/newest-dapps-on-bnb-chain-may-20-26</link>
+            <guid>https://www.bnbchain.org/en/blog/newest-dapps-on-bnb-chain-may-20-26</guid>
+            <pubDate>Wed, 04 Oct 2023 00:00:00 GMT</pubDate>
+            <description><![CDATA[Every week, new builders join BNB Chain—spanning DeFi, AI, DeSoc, Web3 gaming, memes, and more.Scroll through the latest projects below. If something grabs your attention, give them a follow. We’ll ke...]]></description>
+        </item>
+        <item>
+            <title><![CDATA[BNB Chain Weekly Ecosystem Report (May 20 – May 26) - BNB Chain Blog]]></title>
+            <link>https://www.bnbchain.org/en/blog/bnb-chain-weekly-ecosystem-report-may-20-may-26</link>
+            <guid>https://www.bnbchain.org/en/blog/bnb-chain-weekly-ecosystem-report-may-20-may-26</guid>
+            <pubDate>Fri, 26 May 2023 00:00:00 GMT</pubDate>
+            <description><![CDATA[Another packed week on BNB Chain. From key metrics to ecosystem milestones, here’s your weekly snapshot—featuring the latest in DeFi, AI, Payments, DeSoc, and more. Dive into the top data, biggest upd...]]></description>
         </item>
     </channel>
 </rss>

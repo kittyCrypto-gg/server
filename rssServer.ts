@@ -1,7 +1,7 @@
 import Server from "./baseServer";
 import axios from "axios";
 import { JSDOM } from "jsdom";
-import { DOMParser } from 'xmldom';
+import { DOMParser } from '@xmldom/xmldom';
 import { Readability } from "@mozilla/readability";
 import { Feed } from "feed";
 import fs from "fs-extra";
@@ -19,8 +19,8 @@ class RssServer extends Server {
     private feeds: Map<string, Feed>;
     private aiParser: aiParser;
 
-    constructor(host: string) {
-        super(host);
+    constructor(host: string, port?: number) {
+        super(host, port);
         this.feeds = new Map();
         this.aiParser = new aiParser(process.env.OPENAI_KEY!);
 
@@ -117,7 +117,7 @@ class RssServer extends Server {
         }
     }
 
-    private extractMetaDate(dom: Document): string | null {
+    private extractMetaDate(dom: any): string | null {
         const metaTags = [
             "meta[property='article:published_time']",
             "meta[name='date']",
@@ -312,8 +312,12 @@ class RssServer extends Server {
     }
 }
 
-(async () => {
-    const host = "kittycrypto.ddns.net";
-    const rssServer = new RssServer(host);
-    await rssServer.start();
-})();
+if (require.main === module) {
+    (async () => {
+        const host = "kittycrypto.ddns.net";
+        const rssServer = new RssServer(host);
+        await rssServer.start();
+    })();
+}
+
+export default RssServer;
