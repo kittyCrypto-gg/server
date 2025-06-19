@@ -3,6 +3,7 @@ import fs from "fs";
 import express, { Request, Response, Express } from "express";
 import bodyParser from "body-parser";
 import net from "net";
+import cors from "cors";
 
 class Server {
   public app: Express;
@@ -28,6 +29,11 @@ class Server {
     this.server = https.createServer(sslOptions, this.app);
 
     this.port = port;
+
+    this.app.use(cors({
+      origin: 'https://kittycrypto.gg',
+      methods: ['GET'],
+    }));
   }
 
   // Method to register routes
