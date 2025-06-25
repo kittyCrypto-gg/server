@@ -25,6 +25,7 @@ interface ChatMessage {
     msg: string;
     timestamp: string;
     msgId: string;
+    edited?: boolean;
 }
 
 interface ModeratorStrings {
@@ -81,12 +82,13 @@ class Chat extends KittyRequest<ChatMessage> {
             if (!message) return { error: "Message not found" };
 
             const msgIdBint = BigInt(msgId);
-            const sessionBint = BigInt(sessionToken);
+            const sessionBint = BigInt(`0x${sessionToken}`);
 
             if (msgIdBint % sessionBint !== BigInt(0)) return res.status(403).send({ error: "Unauthorized" });
 
             console.log(`✏️ Editing message ${msgId}`);
             message.msg = newMessage;
+            message.edited = true;
             messages[index] = message;
 
             const encryptedData = this.processChatMessages(messages, true);
@@ -233,7 +235,8 @@ class Chat extends KittyRequest<ChatMessage> {
             id: encrypt ? this.encryptValue(msg.id) : this.decryptValue(msg.id),
             msg: encrypt ? this.encryptValue(msg.msg) : this.decryptValue(msg.msg),
             msgId: msg.msgId,
-            timestamp: msg.timestamp
+            timestamp: msg.timestamp,
+            ...(msg.edited ? { edited: true } : {})
         }));
     }
 
