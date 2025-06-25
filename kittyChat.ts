@@ -235,7 +235,7 @@ class Chat extends KittyRequest<ChatMessage> {
             id: encrypt ? this.encryptValue(msg.id) : this.decryptValue(msg.id),
             msg: encrypt ? this.encryptValue(msg.msg) : this.decryptValue(msg.msg),
             msgId: msg.msgId,
-            timestamp: msg.timestamp,
+            timestamp: new Date().toISOString(),
             ...(msg.edited ? { edited: true } : {})
         }));
     }
