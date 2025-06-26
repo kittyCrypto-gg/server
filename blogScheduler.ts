@@ -1,0 +1,85 @@
+import { GirhubTracker } from "./githubTracker";
+import { autoBlogger, ModeratorStrings } from "./autoBlogger";
+import { OpenAI } from "openai";
+import { readFileSync } from "fs";
+
+const apiKey = process.env.OPENAI_KEY || "";
+const openai = new OpenAI({ apiKey });
+
+type GithubAutoSchedulerOptions = {
+  owner: string;
+  repos: string[];
+  blogUser?: string;
+  branch?: string;
+  sinceDays?: number;
+};
+
+export class GithubAutoScheduler {
+  private owner: string;
+  private repos: string[];
+  private blogUser: string;
+  private branch: string;
+  private sinceDays: number;
+  private openai: OpenAI = openai;
+  private strings: { [key: string]: ModeratorStrings };
+
+  constructor(opts: GithubAutoSchedulerOptions) {
+    this.owner = opts.owner;
+    this.repos = opts.repos;
+    this.blogUser = opts.blogUser ?? "Kitty";
+    this.branch = opts.branch ?? "main";
+    this.sinceDays = opts.sinceDays ?? 7;
+    this.strings = JSON.parse(readFileSync("./strings.json", "utf-8"));
+    this.scheduleNext();
+  }
+
+  private msUntilNextSunday(): number {
+    const now = new Date();
+    const day = now.getDay(); // 0 = Sunday
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    const second = now.getSeconds();
+    let daysUntil = (7 - day) % 7;
+    if (daysUntil === 0 && (hour > 0 || minute > 0 || second > 0)) daysUntil = 7;
+    const next = new Date(now);
+    next.setDate(now.getDate() + daysUntil);
+    next.setHours(0, 0, 0, 0);
+    return next.getTime() - now.getTime();
+  }
+
+  private async runFullTrackingForAllRepos() {
+    for (const repo of this.repos) {
+      try {
+        const tracker = new GirhubTracker(this.owner, [repo]);
+        await tracker.getCommits(this.branch, this.sinceDays);
+        const blogger = new autoBlogger(this.owner, repo, this.openai, this.strings);
+        await blogger.summariseLatestToBlogPost(this.blogUser);
+        console.log(`✅ Auto-tracked and blogged for ${repo} at ${new Date().toISOString()}`);
+      } catch (err) {
+        console.error(`❌ Error running tracking or blogging for ${repo}:`, err);
+      }
+    }
+  }
+
+  private scheduleNext() {
+    const msDelay = this.msUntilNextSunday();
+    console.log(
+      `⏰ Next githubTracker+autoBlogger run scheduled in ${Math.floor(msDelay / 3600000)}h ${(msDelay / 60000) % 60}m`
+    );
+    setTimeout(async () => {
+      try {
+        await this.runFullTrackingForAllRepos();
+      } finally {
+        // Schedule next one for 7 days later, regardless of time taken
+        setTimeout(() => this.runFullTrackingForAllRepos(), 7 * 24 * 60 * 60 * 1000);
+        this.scheduleNext();
+      }
+    }, msDelay);
+  }
+
+  public async runOnceNow(): Promise<void> {
+    console.log("🔄 Running full tracking and blogging now...");
+    await this.runFullTrackingForAllRepos();
+    console.log("✅ Run complete. Next run will be scheduled for next Sunday.");
+  }
+}

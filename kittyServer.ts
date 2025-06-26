@@ -8,7 +8,7 @@ import { promises } from "fs";
 import crypto from "crypto";
 import { Request, Response } from "express";
 import KittyRequest from "./kittyRequest";
-import { json } from "body-parser";
+import { GithubAutoScheduler } from "./blogScheduler";
 
 // Server Configuration
 const HOST = "kittycrypto.ddns.net";
@@ -182,6 +182,12 @@ async function trackChatChanges() {
 
 // Modify Chat to Call `notifyClients()` When New Messages Arrive
 chat.onNewMessage = notifyClients;
+
+const blogger = new GithubAutoScheduler({
+  owner: "KittyCrypto-gg",
+  repos: ["kittyServer", "kittycrypto"],
+  blogUser: "autoKitty"
+});
 
 server.start();
 trackChatChanges();
