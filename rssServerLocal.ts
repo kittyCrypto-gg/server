@@ -115,10 +115,25 @@ class RssServerLocal extends RssServer {
                 const posts = await this.loadLocalPosts();
                 // Generate RSS feed object
                 const feed = this.generateLocalRSS(posts);
-                // Set correct content type for RSS
+                let xml = feed.rss2();
+
+                // Inject <author> for each item
+                posts.forEach(post => {
+                    // Escape special characters for regex
+                    const safeTitle = post.title.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+                    // Match the item's <title>...<description>
+                    const re = new RegExp(
+                        `(<title><!\\[CDATA\\[${safeTitle}\\]\\]><\\/title>[\\s\\S]*?<description>[\\s\\S]*?<\\/description>)`
+                    );
+                    xml = xml.replace(
+                        re,
+                        `$1\n<author>${post.author || 'Kitty'}</author>`
+                    );
+                });
+
                 res.set("Content-Type", "application/xml");
-                // Send the feed as RSS XML
-                res.send(feed.rss2());
+                res.send(xml);
+
             } catch (error) {
                 console.error(`Error generating local RSS feed:`, error);
                 res.status(500).send("Error generating RSS feed");
