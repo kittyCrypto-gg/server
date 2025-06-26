@@ -1,4 +1,4 @@
-# kittyServer - ${V0}
+# kittyServer
 
 Backend for [https://kittycrypto.gg](https://kittycrypto.gg) 🐾
 

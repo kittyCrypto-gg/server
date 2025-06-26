@@ -5,3 +5,5 @@ comments.json
 blockchain/
 # Ignore ./blogposts
 blogposts/
+# Ignore commitsTracker
+commitsTracker/
