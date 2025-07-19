@@ -185,10 +185,12 @@ chat.onNewMessage = notifyClients;
 
 const blogger = new GithubAutoScheduler({
   owner: "KittyCrypto-gg",
-  repos: ["kittyServer", "kittycrypto"],
+  repos: ["server", "website"],
   blogUser: "autoKitty"
 });
 
 server.start();
 trackChatChanges();
 console.log(`🚀 Kitty Server is running on https://${HOST}:${PORT}`);
+
+//blogger.runOnceNow();

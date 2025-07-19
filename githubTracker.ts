@@ -253,7 +253,7 @@ export class GirhubTracker {
 
 // Example usage:
 
-// const tracker = new GirhubTracker('KittyCrypto-gg', ['kittyServer', 'kittycrypto']);
-// tracker.getCommits('main', 7).then(() => {
+// const tracker = new GirhubTracker('KittyCrypto-gg', ['server', 'website']);
+// tracker.getCommits('main', 14).then(() => {
 //   console.log('Done');
 // });
