@@ -36,26 +36,35 @@ interface ModeratorStrings {
 class Chat extends KittyRequest<ChatMessage> {
     private strings: { [key: string]: ModeratorStrings };
     private messageCache: ChatMessage[] | null = null;
+    private ready: boolean = false;
 
     constructor(server: Server, jsonFilePath: string, sessionTokens: Set<string>) {
+
         super(server, jsonFilePath, sessionTokens, Chat.isValidChatMessage);
-
-        // Register the chat endpoint
-        this.server.app.post("/chat", async (req: Request, res: Response) => {
-            await this.handleRequest(req, res, () => this.storeMessage(req, res));
-        });
-
-        this.server.app.post("/chat/edit", async (req: Request, res: Response) => {
-            await this.handleRequest(req, res, () => this.editMessage(req, res));
-        });
-
-        this.server.app.post("/chat/delete", async (req: Request, res: Response) => {
-            await this.deleteMessage(req, res);
-        });
-
-        //this.server.logEndpoints();
-
         this.strings = JSON.parse(fs.readFileSync("./strings.json", "utf-8"));
+        try {
+            // Register the chat endpoint
+            this.server.app.post("/chat", async (req: Request, res: Response) => {
+                await this.handleRequest(req, res, () => this.storeMessage(req, res));
+            });
+
+            this.server.app.post("/chat/edit", async (req: Request, res: Response) => {
+                await this.handleRequest(req, res, () => this.editMessage(req, res));
+            });
+
+            this.server.app.post("/chat/delete", async (req: Request, res: Response) => {
+                await this.deleteMessage(req, res);
+            });
+
+            //this.server.logEndpoints();
+
+            
+            this.ready = true;
+        } catch (error) {
+            console.error("❌ Failed to register chat endpoints:", error);
+            this.ready = false;
+            return;
+        }
     }
 
     private findMessageData(msgId: string): { messages: ChatMessage[], message: ChatMessage | undefined, index: number } {
@@ -309,6 +318,12 @@ class Chat extends KittyRequest<ChatMessage> {
 
     static isValidIp(ip: string): boolean {
         return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[0-9a-fA-F:]+$/.test(ip);
+    }
+
+    public readyMessage(): string {
+        return this.ready
+            ? "💬 Chat is ready."
+            : "⚠️ Chat is not ready. Something went wrong.";
     }
 }
 

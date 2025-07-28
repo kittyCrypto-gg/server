@@ -140,9 +140,9 @@ class RssServerLocal extends RssServer {
             }
         });
 
-        console.log(
-            `🐾 Registered local blog RSS endpoint: https://${this.host}:${this.port}/rss/${this.localFeedSlug}`
-        );
+        // console.log(
+        //     `🐾 Registered local blog RSS endpoint: https://${this.host}:${this.port}/rss/${this.localFeedSlug}`
+        // );
     }
 
 }
@@ -153,6 +153,6 @@ if (require.main === module) {
         const port = 6819;
         const rssServerLocal = new RssServerLocal(host, port);
         await rssServerLocal.start();
-        console.log(`🐾 Kitty's local RSS server running at https://${host}:${port}/rss/kittycrypto`);
+        // console.log(`🐾 Kitty's local RSS server running at https://${host}:${port}/rss/kittycrypto`);
     })();
 }

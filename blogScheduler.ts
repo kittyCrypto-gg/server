@@ -63,9 +63,9 @@ export class GithubAutoScheduler {
 
   private scheduleNext() {
     const msDelay = this.msUntilNextSunday();
-    console.log(
-      `⏰ Next githubTracker+autoBlogger run scheduled in ${Math.floor(msDelay / 3600000)}h ${(msDelay / 60000) % 60}m`
-    );
+    // console.log(
+    //   `⏰ Next githubTracker + autoBlogger run scheduled in ${Math.floor(msDelay / 3600000)}h ${(msDelay / 60000) % 60}m`
+    // );
     setTimeout(async () => {
       try {
         await this.runFullTrackingForAllRepos();

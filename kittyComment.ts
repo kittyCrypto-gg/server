@@ -24,6 +24,8 @@ export interface CommentData {
 
 class Comment extends KittyRequest<CommentData> {
   private strings: { [key: string]: ModeratorStrings } = {};
+  private ready: boolean = false;
+
   constructor(server: Server, sessionTokens: Set<string>) {
     super(server, "./comments.json", sessionTokens, Comment.isValidComment);
 
@@ -31,12 +33,20 @@ class Comment extends KittyRequest<CommentData> {
       this.strings = JSON.parse(fs.readFileSync("./strings.json", "utf-8"));
     } catch {
       console.warn("⚠️ Could not load strings.json for moderator.");
+      this.ready = false;
+      return;
     }
 
-    // ✅ Register the POST /comment endpoint directly here
-    this.server.app.post("/comment", async (req: Request, res: Response) => {
-      await this.handleRequest(req, res, () => this.storeComment(req, res));
-    });
+    try {
+      // ✅ Register the POST /comment endpoint directly here
+      this.server.app.post("/comment", async (req: Request, res: Response) => {
+        await this.handleRequest(req, res, () => this.storeComment(req, res));
+      });
+      this.ready = true;
+    } catch (error) {
+      console.error("❌ Failed to register /comment endpoint:", error);
+      this.ready = false;
+    }
   }
 
   private async moderateComment(rawMsg: string): Promise<string> {
@@ -72,7 +82,7 @@ class Comment extends KittyRequest<CommentData> {
     if (!Comment.sessionTokens.has(body.sessionToken)) {
       return { error: "Invalid session token." };
     }
-    
+
     body.page = decodeURIComponent(body.page);
     const safeMsg = await this.moderateComment(body.msg);
 
@@ -83,6 +93,12 @@ class Comment extends KittyRequest<CommentData> {
     body.msg = safeMsg;
     this.saveToFile(body);
     return { success: true, received: body.id };
+  }
+
+  public readyMessage(): string {
+    return this.ready
+      ? "💭 Comment system is ready."
+      : "⚠️ Comment system is not ready. Something went wrong.";
   }
 
   static isValidComment(data: unknown): data is CommentData {

@@ -1,6 +1,7 @@
 import path from "path";
 import Server from "./baseServer";
 import Chat from "./kittyChat";
+import Renderer from "./kittyWebsite";
 import Comment from "./kittyComment";
 import { CommentData } from "./kittyComment";
 import cors from "cors";
@@ -16,11 +17,11 @@ const PORT = 7619;
 
 // Chat JSON File Path
 const chat_json_path = path.join(__dirname, "chat.json");
-console.log(`Chat JSON File Path: ${chat_json_path}`);
+// console.log(`Chat JSON File Path: ${chat_json_path}`);
 
 // Comments JSON File Path
 const comments_json_path = path.join(__dirname, "comments.json");
-console.log(`Comments JSON File Path: ${comments_json_path}`);
+// console.log(`Comments JSON File Path: ${comments_json_path}`);
 
 // Initialise the HTTPS server
 const server = new Server(HOST, PORT);
@@ -30,7 +31,7 @@ server.app.use(
       origin: (origin, callback) => {
         const allowedOrigins = [
           "https://kittycrypto.gg",
-          "https://test.kittycrypto.gg"
+          "https://render.kittycrypto.gg"
         ];
         if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
@@ -50,6 +51,7 @@ const sessionTokens = new Set<string>();
 const requestHandler = new KittyRequest(server, "none", sessionTokens, (data: unknown): data is object => true);
 const chat = new Chat(server, chat_json_path, sessionTokens);
 const comment = new Comment(server, sessionTokens);
+const renderer = new Renderer(server);
 
 // Store SSE clients
 const clients: Response[] = [];
@@ -191,6 +193,13 @@ const blogger = new GithubAutoScheduler({
 
 server.start();
 trackChatChanges();
+
+//server.logEndpoints();
+
+console.log(chat.readyMessage());
+console.log(comment.readyMessage());
+console.log(renderer.readyMessage());
+
 console.log(`🚀 Kitty Server is running on https://${HOST}:${PORT}`);
 
 //blogger.runOnceNow();

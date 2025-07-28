@@ -307,8 +307,8 @@ class RssServer extends Server {
             });
         }
 
-        console.log("Registered endpoints:");
-        sources.forEach(source => console.log(`https://${this.host}:${this.port}/rss/${this.slugify(source)}`));
+        // console.log("Registered endpoints:");
+        // sources.forEach(source => console.log(`https://${this.host}:${this.port}/rss/${this.slugify(source)}`));
     }
 }
 
