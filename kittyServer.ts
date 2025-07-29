@@ -10,10 +10,72 @@ import crypto from "crypto";
 import { Request, Response } from "express";
 import KittyRequest from "./kittyRequest";
 import { GithubAutoScheduler } from "./blogScheduler";
+import fetch from "node-fetch"
 
 // Server Configuration
 const HOST = "kittycrypto.ddns.net";
 const PORT = 7619;
+
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+
+async function getChapters(storyPath: string): Promise<{ chapters: number[], urls: string[] }> {
+    const chapters: number[] = [];
+    const urls: string[] = [];
+    const BASE = "https://kittycrypto.gg";
+
+    const remotePath = storyPath.replace(/^\.\//, "");
+    try {
+        const url0 = `${BASE}/${remotePath}/chapt0.xml`;
+        const res0 = await fetch(url0, { method: "HEAD" });
+        if (res0.ok) {
+            chapters.push(0);
+            urls.push(url0);
+        }
+    } catch { /* No chapter 0; do nothing */ }
+
+    let i = 1;
+    while (true) {
+        const url = `${BASE}/${remotePath}/chapt${i}.xml`;
+        try {
+            const res = await fetch(url, { method: "HEAD" });
+            if (!res.ok) break;
+            chapters.push(i);
+            urls.push(url);
+            i++;
+        } catch {
+            console.log(`Discovered ${chapters.length} chapters for ${storyPath}.`);
+            break;
+        }
+    }
+
+    console.log(`Discovered ${chapters.length} chapters for ${storyPath}.`);
+    return { chapters, urls };
+}
+
+
+// Helper: Get all HTML files at repo root (and subdirs if needed)
+async function getHtmlPagesFromGithub(repoOwner: string, repoName: string, dir: string = ""): Promise<string[]> {
+    const apiUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/contents/${dir}`;
+    
+    const headers: Record<string, string> = { "User-Agent": "kitty-sitemap-bot" };
+
+    if (GITHUB_TOKEN) headers["Authorization"] = `Bearer ${GITHUB_TOKEN}`;
+
+    const res = await fetch(apiUrl, { headers });
+    
+    if (!res.ok) throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
+    const items = await res.json();
+    let urls: string[] = [];
+    for (const item of items) {
+        if (item.type === "file" && item.name.endsWith(".html")) {
+            const pagePath = dir ? `${dir}/${item.name}` : item.name;
+            urls.push(`https://kittycrypto.gg/${pagePath.replace(/^index\.html$/, "")}`); // root index.html = /
+        } else if (item.type === "dir") {
+            urls.push(...await getHtmlPagesFromGithub(repoOwner, repoName, item.path));
+        }
+    }
+    return urls;
+}
 
 // Chat JSON File Path
 const chat_json_path = path.join(__dirname, "chat.json");
@@ -28,22 +90,22 @@ const server = new Server(HOST, PORT);
 
 server.app.use(
     cors({
-      origin: (origin, callback) => {
-        const allowedOrigins = [
-          "https://kittycrypto.gg",
-          "https://render.kittycrypto.gg"
-        ];
-        if (!origin || allowedOrigins.includes(origin)) {
-          callback(null, true);
-        } else {
-          callback(new Error("Not allowed by CORS"));
-        }
-      },
-      methods: ["GET", "POST", "DELETE"],
-      allowedHeaders: ["Content-Type", "Authorization"],
-      credentials: true,
+        origin: (origin, callback) => {
+            const allowedOrigins = [
+                "https://kittycrypto.gg",
+                "https://render.kittycrypto.gg"
+            ];
+            if (!origin || allowedOrigins.includes(origin)) {
+                callback(null, true);
+            } else {
+                callback(new Error("Not allowed by CORS"));
+            }
+        },
+        methods: ["GET", "POST", "DELETE"],
+        allowedHeaders: ["Content-Type", "Authorization"],
+        credentials: true,
     })
-  );
+);
 
 // Session store to track active sessions
 const sessionTokens = new Set<string>();
@@ -51,7 +113,6 @@ const sessionTokens = new Set<string>();
 const requestHandler = new KittyRequest(server, "none", sessionTokens, (data: unknown): data is object => true);
 const chat = new Chat(server, chat_json_path, sessionTokens);
 const comment = new Comment(server, sessionTokens);
-const renderer = new Renderer(server);
 
 // Store SSE clients
 const clients: Response[] = [];
@@ -186,10 +247,72 @@ async function trackChatChanges() {
 chat.onNewMessage = notifyClients;
 
 const blogger = new GithubAutoScheduler({
-  owner: "KittyCrypto-gg",
-  repos: ["server", "website"],
-  blogUser: "autoKitty"
+    owner: "KittyCrypto-gg",
+    repos: ["server", "website"],
+    blogUser: "autoKitty"
 });
+
+server.app.get('/robots.txt', (req, res) => { // Serve robots.txt
+    res.type('text/plain');
+    res.send(
+        `User-agent: *
+            Disallow:
+            Sitemap: https://render.kittycrypto.gg/sitemap.xml
+            Host: render.kittycrypto.gg`
+    );
+});
+
+server.app.get(["/sitemap.xml", "/website/sitemap.xml"], async (req, res) => {
+    try {
+        const githubPages = await getHtmlPagesFromGithub("kittyCrypto-gg", "website");
+
+        const storiesRes = await fetch("https://kittycrypto.gg/scripts/stories.json");
+        const stories: Record<string, string> = await storiesRes.json();
+
+        const storyChapterLinks: string[] = [];
+        for (const [storyName, storyPath] of Object.entries(stories)) {
+            const { chapters } = await getChapters(storyPath);
+            console.log(`Story: ${storyName}, Path: ${storyPath}, Chapters:`, chapters);
+            for (const chapter of chapters) {
+                const url = `https://render.kittycrypto.gg/reader.html?story=${encodeURIComponent(storyPath)}&chapter=${chapter}`;
+                console.log("Adding URL:", url);
+                storyChapterLinks.push(url);
+            }
+        }
+
+        const allUrls = [...githubPages, ...storyChapterLinks]
+            .map(url => url.replace(/\/+$/, ""))
+            .filter((v, i, arr) => arr.indexOf(v) === i);
+
+        // XML ESCAPE function
+        function xmlEscape(str: string) {
+            return str.replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&apos;");
+        }
+
+        // Build XML sitemap (no extra indentation, valid xml)
+        const locs = allUrls.map(
+            url => `<url><loc>${xmlEscape(url)}</loc></url>`
+        ).join("\n");
+
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>\n` +
+            `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+            `${locs}\n` +
+            `</urlset>`;
+
+        res.set("Content-Type", "application/xml");
+        res.send(xml);
+        console.log(`✅ Sitemap generated with ${allUrls.length} URLs.`);
+    } catch (error) {
+        console.error("❌ Error generating sitemap:", error);
+        res.status(500).send("Failed to generate sitemap.");
+    }
+});
+
+const renderer = new Renderer(server);
 
 server.start();
 trackChatChanges();
