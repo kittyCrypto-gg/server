@@ -4,21 +4,30 @@ import express, { Request, Response, Express } from "express";
 import bodyParser from "body-parser";
 import net from "net";
 import cors from "cors";
+import process from "process";
 
 class Server {
   public app: Express;
   protected server: https.Server;
   protected readonly host: string;
   protected port: number | undefined;
+  protected privateKeyPath = process.env.PRIVKEY_PATH || undefined;
+  protected certificatePath = process.env.CERT_PATH || undefined;
+  protected chainPath = process.env.CHAIN_PATH || undefined;
 
   constructor(host: string, port?: number) {
     this.host = host;
 
+    if (!this.privateKeyPath || !this.certificatePath || !this.chainPath) {
+      console.warn("Warning: SSL certificate paths are not fully set in environment variables. Aborting.");
+      process.exit(1);
+    }
+
     // Load SSL certificates from the archive directory instead of the symlinked live directory
     const sslOptions = {
-      key: fs.readFileSync(`/home/kitty/server/certs/privkey.pem`, "utf8"),
-      cert: fs.readFileSync(`/home/kitty/server/certs/cert.pem`, "utf8"),
-      ca: fs.readFileSync(`/home/kitty/server/certs/chain.pem`, "utf8"),
+      key: fs.readFileSync(this.privateKeyPath, "utf8"),
+      cert: fs.readFileSync(this.certificatePath, "utf8"),
+      ca: fs.readFileSync(this.chainPath, "utf8"),
     };
 
     // Initialise Express app

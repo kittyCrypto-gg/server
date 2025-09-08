@@ -2,9 +2,31 @@ import { readdir, readFile, mkdir, writeFile, access, constants } from 'fs/promi
 import path from 'path';
 import { OpenAI } from "openai";
 
+
+interface OpenAIAPIErrorShape {
+  error?: { message?: string };
+}
+
 export interface ModeratorStrings {
   role?: string;
   user?: string;
+}
+
+export interface CommitEntry {
+  sha: string;
+  author: string;
+  date: string & { readonly __iso8601: unique symbol };
+  message: string;
+  url: string;
+  diff: string;
+  version?: string;
+}
+
+export interface CommitLog {
+  repo: string;
+  createdAt: string & { readonly __iso8601: unique symbol };
+  commits: CommitEntry[];
+  blogged?: boolean;
 }
 
 export class autoBlogger {
@@ -36,7 +58,7 @@ export class autoBlogger {
     catch { await mkdir(dir, { recursive: true }); }
   }
 
-  private async getLatestJson(): Promise<{ file: string, json: any } | null> {
+  private async getLatestJson(): Promise<{ file: string, json: CommitLog } | null> {
     const pattern = new RegExp(`-GithubTracker-${this.owner}-${this.repo}\\.json$`);
     const files = await readdir(this.commitsDir);
     const matches = files.filter(f => pattern.test(f));
@@ -53,79 +75,61 @@ export class autoBlogger {
   }
 
   // Recursively split a JSON log into valid JSON chunks, each under the specified token limit.
-  private splitJsonByCommitsRecursive(
-    json: any,
+    private splitJsonByCommitsRecursive(
+    json: CommitLog,
     maxTokens: number,
     systemPromptTokens: number,
     userPromptTokens: number,
     minCommitsPerChunk: number = 1
   ): string[] {
-    const headerObj = { ...json };
-    delete headerObj.commits;
-
-    const commits = json.commits;
+    const { commits, ...headerObj } = json;
     const totalCommits = commits.length;
 
-    // If there are no commits, just return the header with empty commits.
     if (totalCommits === 0) {
       return [JSON.stringify({ ...headerObj, commits: [] }, null, 2)];
     }
 
-    // Precompute static token overhead (header, prompts, JSON brackets)
     const headerString = JSON.stringify(headerObj, null, 2);
     const staticTokens = autoBlogger.countTokens(headerString) + systemPromptTokens + userPromptTokens + 32;
 
-    // If all commits fit, just one chunk
-    const allCommitsString = JSON.stringify({ ...headerObj, commits }, null, 2);
-    if (staticTokens + autoBlogger.countTokens(JSON.stringify(commits, null, 2)) < maxTokens) {
-      return [allCommitsString];
+    const allCommitsTokens = staticTokens + autoBlogger.countTokens(JSON.stringify(commits, null, 2));
+    if (allCommitsTokens < maxTokens) {
+      return [JSON.stringify({ ...headerObj, commits }, null, 2)];
     }
 
-    // Conservative: start with a small number, double up until over limit, then binary search
     let low = minCommitsPerChunk;
     let high = totalCommits;
     let lastGood = minCommitsPerChunk;
 
-    // Find max commits per chunk that fits in token limit
     while (low <= high) {
       const mid = Math.floor((low + high) / 2);
       const chunkCommits = commits.slice(0, mid);
-      const chunkStr = JSON.stringify({ ...headerObj, commits: chunkCommits }, null, 2);
       const tokens = staticTokens + autoBlogger.countTokens(JSON.stringify(chunkCommits, null, 2));
-      if (tokens < maxTokens) {
-        lastGood = mid;
-        low = mid + 1;
-      } else {
-        high = mid - 1;
-      }
+      if (tokens < maxTokens) { lastGood = mid; low = mid + 1; continue; }
+      high = mid - 1;
     }
 
-    // Now split into chunks of lastGood
     const result: string[] = [];
     for (let i = 0; i < totalCommits; i += lastGood) {
       const chunkCommits = commits.slice(i, i + lastGood);
-      const chunkJson = { ...headerObj, commits: chunkCommits };
-      const chunkStr = JSON.stringify(chunkJson, null, 2);
-      // If chunk is still too big (e.g. due to a gigantic diff), recurse on that chunk
       const tokens = staticTokens + autoBlogger.countTokens(JSON.stringify(chunkCommits, null, 2));
       if (tokens > maxTokens && chunkCommits.length > 1) {
-        // Recurse for this chunk with smaller size
         const recursiveChunks = this.splitJsonByCommitsRecursive(
-          { ...headerObj, commits: chunkCommits },
+          { ...(headerObj as CommitLog), commits: chunkCommits },
           maxTokens,
           systemPromptTokens,
           userPromptTokens,
           1
         );
         result.push(...recursiveChunks);
-      } else {
-        result.push(chunkStr);
+        continue;
       }
+      result.push(JSON.stringify({ ...headerObj, commits: chunkCommits }, null, 2));
     }
     return result;
   }
 
-  private static extractTokenCountFromError(err: any): number | null {
+  private static extractTokenCountFromError(err: OpenAIAPIErrorShape): number | null {
     const msg = err?.error?.message || '';
     const match = msg.match(/resulted in (\d+) tokens/);
     return match ? parseInt(match[1], 10) : null;
@@ -187,7 +191,7 @@ export class autoBlogger {
       summaries = [response.choices[0].message.content ?? "Error generating the blog post."];
     } catch (err) {
       // On error, extract offending token count and split properly
-      const offendingTokens = autoBlogger.extractTokenCountFromError(err) ?? 128000;
+      const offendingTokens = autoBlogger.extractTokenCountFromError(err as OpenAIAPIErrorShape) ?? 128000;
 
       // Estimate tokens used by prompts
       const systemPromptTokens = autoBlogger.countTokens(systemPrompt);
@@ -230,7 +234,7 @@ export class autoBlogger {
           summary = response.choices[0].message.content ?? "";
         } catch (chunkErr) {
           // If this chunk still fails, try recursively splitting further
-          const tokens = autoBlogger.extractTokenCountFromError(chunkErr) ?? maxTokensPerChunk;
+          const tokens = autoBlogger.extractTokenCountFromError(chunkErr as OpenAIAPIErrorShape) ?? maxTokensPerChunk;
           if (tokens < 2048) throw chunkErr; // Give up if just too small
           const systemPromptTokens2 = systemPromptTokens;
           const userPromptTokens2 = userPromptTokens;

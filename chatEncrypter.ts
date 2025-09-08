@@ -2,6 +2,14 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 
+interface ChatMessageEncrypted {
+  nick: string;
+  id: string;
+  msg: string;
+  msgId: string;
+  timestamp: string & { readonly __iso8601: unique symbol };
+}
+
 // Generate a 32-byte key
 const generateKey = (): Buffer => {
     return crypto.randomBytes(32);
@@ -21,7 +29,7 @@ const encryptChat = (chatFilePath: string, outputFilePath: string, key: Buffer) 
     try {
         const chatData = JSON.parse(fs.readFileSync(chatFilePath, "utf-8"));
 
-        const encryptedData = chatData.map((msg: any) => ({
+        const encryptedData = chatData.map((msg: ChatMessageEncrypted ) => ({
             nick: encryptValue(msg.nick, key),
             id: encryptValue(msg.id, key),
             msg: encryptValue(msg.msg, key),

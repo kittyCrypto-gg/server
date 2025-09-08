@@ -50,7 +50,7 @@ class KittyWebsite {
           { timeout: 5000 }
         );
       } catch (err) {
-        // Timeout: Continue anyway, maybe the content just didn't render, but better to return *something*.
+        console.log("⚠️ Timeout waiting for #reader to load content.");
       }
 
       let html = await page.content();

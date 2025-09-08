@@ -15,6 +15,15 @@ const nlpWithDates = nlp.extend(dates);
 const SOURCES_FILE = "rssSources.json";
 const RSS_CACHE_DIR = "./rss";
 
+interface MetaDoc {
+  getElementsByTagName(tag: string): {
+    length: number;
+    item(index: number): {
+      getAttribute(name: string): string | null;
+    } | null;
+  };
+}
+
 class RssServer extends Server {
     private feeds: Map<string, Feed>;
     private aiParser: aiParser;
@@ -117,7 +126,7 @@ class RssServer extends Server {
         }
     }
 
-    private extractMetaDate(dom: any): string | null {
+    private extractMetaDate(dom: MetaDoc): string | null {
         const metaTags = [
             "meta[property='article:published_time']",
             "meta[name='date']",
@@ -129,7 +138,8 @@ class RssServer extends Server {
         for (const tag of metaTags) {
             const elements = dom.getElementsByTagName("meta");
             for (let i = 0; i < elements.length; i++) {
-                const element = elements[i];
+                const element = elements.item(i);
+                if (!element) continue;
                 const nameAttr = element.getAttribute("name") || element.getAttribute("property");
                 const contentAttr = element.getAttribute("content");
 

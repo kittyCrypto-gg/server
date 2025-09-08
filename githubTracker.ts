@@ -21,6 +21,24 @@ type RepoHistory = {
 
 function pad(n: number): string { return n.toString().padStart(2, '0'); }
 
+interface GitHubCommit {
+  sha: string;
+  html_url?: string;
+  commit: {
+    message: string;
+    author?: {
+      name?: string;
+      date?: string;
+    };
+  };
+}
+
+interface GitHubContentFile {
+  sha: string;
+  content: string;   // base64
+  encoding: string;  // "base64"
+}
+
 export class GirhubTracker {
   private owner: string;
   private repos: RepoIdentifier[];
@@ -184,13 +202,38 @@ export class GirhubTracker {
       return [];
     }
 
-    const data = (await resp.json()) as any[];
-    if (!Array.isArray(data) || data.length === 0) return [];
+    const raw: unknown = await resp.json();
+    if (!Array.isArray(raw)) return [];
+
+    // Validate items loosely, only fields we use
+    const items: GitHubCommit[] = [];
+    for (const el of raw) {
+      if (typeof el !== 'object' || el === null) continue;
+      const r = el as Record<string, unknown>;
+      if (typeof r.sha !== 'string') continue;
+      if (typeof r.commit !== 'object' || r.commit === null) continue;
+
+      const commit = r.commit as Record<string, unknown>;
+      const message = typeof commit.message === 'string' ? commit.message : '';
+      const authorObj = commit.author as Record<string, unknown> | undefined;
+      const authorName = authorObj && typeof authorObj.name === 'string' ? authorObj.name : '';
+      const authorDate = authorObj && typeof authorObj.date === 'string' ? authorObj.date : '';
+
+      items.push({
+        sha: r.sha,
+        html_url: typeof r.html_url === 'string' ? r.html_url : undefined,
+        commit: {
+          message,
+          author: { name: authorName, date: authorDate }
+        }
+      });
+    }
+    if (items.length === 0) return [];
 
     const summaries: CommitSummary[] = [];
     let major = versionInfo.major;
-    for (let i = 0; i < data.length; ++i) {
-      const commitObj = data[i];
+
+    for (const commitObj of items) {
       const sha = commitObj.sha;
       const author = commitObj.commit.author?.name || '';
       const date = commitObj.commit.author?.date || '';
@@ -198,7 +241,6 @@ export class GirhubTracker {
       const html_url = commitObj.html_url || '';
       const diff = await this.fetchDiff(repo, sha);
 
-      // check for version bump in this commit's readme
       let commitMajor = major;
       try {
         const rawUrl = `https://raw.githubusercontent.com/${this.owner}/${repo}/${sha}/README.md`;
@@ -206,11 +248,10 @@ export class GirhubTracker {
         if (readmeResp.ok) {
           const content = await readmeResp.text();
           const match = content.match(/\$\{V(\d+)\}/);
-          if (match) {
-            commitMajor = parseInt(match[1], 10);
-          }
+          if (match) commitMajor = parseInt(match[1], 10);
         }
       } catch {}
+
       summaries.push({
         sha,
         author,
@@ -222,6 +263,7 @@ export class GirhubTracker {
       });
       major = commitMajor;
     }
+
     return summaries;
   }
 
