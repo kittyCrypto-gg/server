@@ -93,7 +93,8 @@ server.app.use(
         origin: (origin, callback) => {
             const allowedOrigins = [
                 "https://kittycrypto.gg",
-                "https://render.kittycrypto.gg"
+                "https://render.kittycrypto.gg",
+                "https://hostel4pets.co.uk"
             ];
             if (!origin || allowedOrigins.includes(origin)) {
                 callback(null, true);
@@ -138,12 +139,12 @@ function getClientIp(req: Request): string {
 }
 
 // Endpoint: Get Raw IP
-server.app.get("/get-ip", (req: Request, res: Response) => {
-    res.json({ ip: getClientIp(req) });
+server.app.get("/get-ip", cors({ origin: "*" }), (req: Request, res: Response) => {
+  res.json({ ip: getClientIp(req) });
 });
 
 // Endpoint: Get Hashed IP
-server.app.get("/get-ip/sha256", (req: Request, res: Response) => {
+server.app.get("/get-ip/sha256", cors({ origin: "*" }), (req: Request, res: Response) => {
     try {
         const hashedId = chat.generateUserId(getClientIp(req));
         res.json({ hashedIp: hashedId });

@@ -109,8 +109,8 @@ class RssServer extends Server {
             const publishedDate =
                 article.publishedTime
                 || this.extractMetaDate(dom)
-                || this.extractDateFromText(article.textContent)
-                || await this.aiParser.extractDate(article.textContent)
+                || this.extractDateFromText(article.textContent ?? "")
+                || (article.textContent ? await this.aiParser.extractDate(article.textContent) : null)
                 || new Date().toISOString();
 
             return {

@@ -6,6 +6,8 @@ import net from "net";
 import cors from "cors";
 import process from "process";
 
+type methods = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'OPTIONS';
+
 class Server {
   public app: Express;
   protected server: https.Server;
@@ -15,6 +17,9 @@ class Server {
   protected certificatePath = process.env.CERT_PATH || undefined;
   protected chainPath = process.env.CHAIN_PATH || undefined;
 
+  private allowedOrigins = new Set<string>(["https://kittycrypto.gg"]);
+  private allowedMethods = new Set<methods>(["GET"]);
+
   constructor(host: string, port?: number) {
     this.host = host;
 
@@ -23,39 +28,44 @@ class Server {
       process.exit(1);
     }
 
-    // Load SSL certificates from the archive directory instead of the symlinked live directory
     const sslOptions = {
       key: fs.readFileSync(this.privateKeyPath, "utf8"),
       cert: fs.readFileSync(this.certificatePath, "utf8"),
       ca: fs.readFileSync(this.chainPath, "utf8"),
+      minVersion: "TLSv1.2" as const
     };
 
-    // Initialise Express app
     this.app = express();
     this.app.use(bodyParser.json());
 
-    // Create HTTPS server
     this.server = https.createServer(sslOptions, this.app);
-
     this.port = port;
 
+    // single CORS middleware that checks against allowedOrigins/methods
     this.app.use(cors({
-      origin: 'https://kittycrypto.gg',
-      methods: ['GET'],
+      origin: (origin, callback) => {
+        if (!origin || this.allowedOrigins.has(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("Not allowed by CORS"));
+        }
+      },
+      methods: Array.from(this.allowedMethods),
     }));
   }
 
-  // Method to register routes
-  registerRoute(path: string, handler: (req: Request, res: Response) => void): void {
-    this.app.post(path, handler);
+  registerRoute(path: string, method: methods, handler: (req: Request, res: Response) => void): void {
+    this.app[method.toLowerCase() as keyof Express](path, handler);
   }
 
-  // Method to start the server
+  addCorsOrigin(origin: string, method: methods): void {
+    this.allowedOrigins.add(origin);
+    this.allowedMethods.add(method);
+  }
+
   async start(): Promise<void> {
     this.port = !this.port ? await this.findFreePort() : this.port;
-    this.server.listen(this.port, () => {
-      //console.log(`HTTPS server is running on https://${this.host}:${this.port}`);
-    });
+    this.server.listen(this.port);
   }
 
   protected async findFreePort(startPort = 3000, endPort = 4000): Promise<number> {
@@ -90,9 +100,9 @@ class Server {
     }
 
     (this.app._router.stack as Middleware[]).forEach((middleware: Middleware) => {
-      if (middleware.route) { // Routes registered directly on the app
+      if (middleware.route) {
         console.log(`Endpoint: https://${this.host}:${this.port}${middleware.route.path}, Method: ${Object.keys(middleware.route.methods).join(', ').toUpperCase()}`);
-      } else if (middleware.name === 'router') { // Router middleware 
+      } else if (middleware.name === 'router') {
         middleware.handle?.stack.forEach((handler: Middleware) => {
           if (handler.route) {
             console.log(`Endpoint: https://${this.host}:${this.port}${handler.route.path}, Method: ${Object.keys(handler.route.methods).join(', ').toUpperCase()}`);
@@ -100,6 +110,14 @@ class Server {
         });
       }
     });
+  }
+
+  public getPort(): number | undefined {
+    return this.port;
+  }
+
+  public getHost(): string {
+    return this.host;
   }
 }
 
