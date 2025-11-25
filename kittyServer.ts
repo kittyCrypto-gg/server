@@ -13,8 +13,19 @@ import { GithubAutoScheduler } from "./blogScheduler";
 import fetch from "node-fetch"
 
 // Server Configuration
-const HOST = "kittycrypto.ddns.net";
-const PORT = 7619;
+const HOST = process.env.HOST;
+
+if (!HOST) {
+    console.error("❌ HOST environment variable is not set. Exiting.");
+    process.exit(1);
+}
+
+const PORT = parseInt(process.env.PORT || "0");
+
+if (isNaN(PORT) || PORT <= 0 || PORT > 65535) {
+    console.error("❌ PORT environment variable is not set or invalid. Exiting.");
+    process.exit(1);
+}
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 

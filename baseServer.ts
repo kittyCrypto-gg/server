@@ -17,8 +17,14 @@ class Server {
   protected certificatePath = process.env.CERT_PATH || undefined;
   protected chainPath = process.env.CHAIN_PATH || undefined;
 
-  private allowedOrigins = new Set<string>(["https://kittycrypto.gg"]);
+  private allowedOrigins = new Set<string>(["https://kittycrypto.gg", "http://localhost"]);
   private allowedMethods = new Set<methods>(["GET"]);
+
+  public get baseUrl(): string {
+    const host = this.host;
+    const port = this.port;
+    return `https://${host}:${port}`;
+  }
 
   constructor(host: string, port?: number) {
     this.host = host;
@@ -54,7 +60,12 @@ class Server {
     }));
   }
 
-  registerRoute(path: string, method: methods, handler: (req: Request, res: Response) => void): void {
+  registerRoute(path: string, method: methods, handler: string | ((req: Request, res: Response) => void | Promise<void> | Promise<Response<any, Record<string, any>> | undefined>)): void {
+    if (typeof handler === "string") {
+      this.app.use(path, express.static(handler));
+      return;
+    }
+
     this.app[method.toLowerCase() as keyof Express](path, handler);
   }
 

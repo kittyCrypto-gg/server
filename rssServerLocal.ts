@@ -15,6 +15,19 @@ interface LocalPost {
     image?: string;
 }
 
+const HOST = process.env.HOST;
+
+if (!HOST) {
+    console.error("❌ HOST environment variable is not set. Exiting.");
+    process.exit(1);
+}
+
+const RSS_PORT = parseInt(process.env.RSS_PORT || "0");
+
+if (isNaN(RSS_PORT) || RSS_PORT <= 0 || RSS_PORT > 65535) {
+    console.error("❌ RSS_PORT environment variable is not set or invalid. Exiting.");
+    process.exit(1);
+}
 
 class RssServerLocal extends RssServer {
     private localPostsDir: string = "./blogposts";
@@ -149,10 +162,10 @@ class RssServerLocal extends RssServer {
 
 if (require.main === module) {
     (async () => {
-        const host = "kittycrypto.ddns.net";
-        const port = 6819;
+        const host = HOST;
+        const port = RSS_PORT;
         const rssServerLocal = new RssServerLocal(host, port);
         await rssServerLocal.start();
-        // console.log(`🐾 Kitty's local RSS server running at https://${host}:${port}/rss/kittycrypto`);
+        console.log(`🐾 Kitty's local RSS server running at https://${host}:${port}/rss/kittycrypto`);
     })();
 }

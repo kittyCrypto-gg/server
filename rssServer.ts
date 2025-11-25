@@ -10,6 +10,20 @@ import dates from 'compromise-dates';
 import { aiParser } from "./aiParser";
 import Parser from "rss-parser";
 
+const HOST = process.env.HOST;
+
+if (!HOST) {
+    console.error("❌ HOST environment variable is not set. Exiting.");
+    process.exit(1);
+}
+
+const PORT = parseInt(process.env.PORT || "0");
+
+if (isNaN(PORT) || PORT <= 0 || PORT > 65535) {
+    console.error("❌ PORT environment variable is not set or invalid. Exiting.");
+    process.exit(1);
+}
+
 const nlpWithDates = nlp.extend(dates);
 
 const SOURCES_FILE = "rssSources.json";
@@ -324,7 +338,7 @@ class RssServer extends Server {
 
 if (require.main === module) {
     (async () => {
-        const host = "kittycrypto.ddns.net";
+        const host = HOST;
         const rssServer = new RssServer(host);
         await rssServer.start();
     })();
