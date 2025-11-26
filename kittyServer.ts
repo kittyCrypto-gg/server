@@ -174,9 +174,12 @@ server.app.get("/chat/stream", (req: Request, res: Response) => {
         return;
     }
 
+    res.setHeader("X-Accel-Buffering", "no");
+    res.setHeader("Content-Encoding", "identity");
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
 
     console.log("🔗 New SSE connection established.");
 
