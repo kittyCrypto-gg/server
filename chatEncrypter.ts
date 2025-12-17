@@ -18,7 +18,7 @@ const generateKey = (): Buffer => {
 // Encryption method (same as `encryptValue` in kittyChat.ts)
 const encryptValue = (value: string, key: Buffer): string => {
     const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
+    const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
     const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
 
     return iv.toString("hex") + ":" + encrypted.toString("hex");
