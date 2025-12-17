@@ -43,8 +43,10 @@ class Server {
 
     this.app = express();
     this.app.use(bodyParser.json());
-
     this.server = https.createServer(sslOptions, this.app);
+
+    
+
     this.port = port;
 
     // single CORS middleware that checks against allowedOrigins/methods
@@ -129,6 +131,10 @@ class Server {
 
   public getHost(): string {
     return this.host;
+  }
+
+  public get allowedOriginsList(): string[] {
+    return Array.from(this.allowedOrigins);
   }
 }
 

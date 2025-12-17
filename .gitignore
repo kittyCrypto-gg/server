@@ -1,9 +1,20 @@
 # Ignore user data
-chat.json
+chat.gcm.json
 comments.json
+rssSources.json
+sessionTokens.json
+strings.json
+tsconfig.json
+enc.py
 # Ignore ./blockchain
 blockchain/
 # Ignore ./blogposts
 blogposts/
+# Ignore ./stories
+stories/
 # Ignore commitsTracker
 commitsTracker/
+# Ignore the superseded folder
+superseded/
+#ignore RSS folder
+rss/

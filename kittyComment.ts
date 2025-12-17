@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import Server from "./baseServer";
 import KittyRequest from "./kittyRequest";
+import { tokenStore } from "./tokenStore";
 import { OpenAI } from "openai";
 import fs from "fs";
 
@@ -26,8 +27,8 @@ class Comment extends KittyRequest<CommentData> {
   private strings: { [key: string]: ModeratorStrings } = {};
   private ready: boolean = false;
 
-  constructor(server: Server, sessionTokens: Set<string>) {
-    super(server, "./comments.json", sessionTokens, Comment.isValidComment);
+  constructor(server: Server, commentsPath: string, TokenStore: tokenStore) {
+    super(server, commentsPath, TokenStore, Comment.isValidComment);
 
     try {
       this.strings = JSON.parse(fs.readFileSync("./strings.json", "utf-8"));
@@ -79,7 +80,7 @@ class Comment extends KittyRequest<CommentData> {
       return { error: "Invalid comment format." };
     }
 
-    if (!Comment.sessionTokens.has(body.sessionToken)) {
+    if (!this.sessionTokens.has(body.sessionToken)) {
       return { error: "Invalid session token." };
     }
 

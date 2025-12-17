@@ -4,6 +4,7 @@ import { Request, Response } from "express";
 import { OpenAI } from "openai";
 import Server from "./baseServer";
 import KittyRequest from "./kittyRequest";
+import { tokenStore } from "./tokenStore";
 
 const CHAT_KEY_RAW = process.env.CHAT_KEY || "";
 const CHAT_KEY_BUFFER = Buffer.from(CHAT_KEY_RAW, "base64");
@@ -38,9 +39,9 @@ class Chat extends KittyRequest<ChatMessage> {
     private messageCache: ChatMessage[] | null = null;
     private ready: boolean = false;
 
-    constructor(server: Server, jsonFilePath: string, sessionTokens: Set<string>) {
+    constructor(server: Server, jsonFilePath: string, TokenStore: tokenStore) {
 
-        super(server, jsonFilePath, sessionTokens, Chat.isValidChatMessage);
+        super(server, jsonFilePath, TokenStore, Chat.isValidChatMessage);
         this.strings = JSON.parse(fs.readFileSync("./strings.json", "utf-8"));
         try {
             // Register the chat endpoint
@@ -58,7 +59,7 @@ class Chat extends KittyRequest<ChatMessage> {
 
             //this.server.logEndpoints();
 
-            
+
             this.ready = true;
         } catch (error) {
             console.error("❌ Failed to register chat endpoints:", error);
@@ -93,7 +94,7 @@ class Chat extends KittyRequest<ChatMessage> {
             const msgIdBint = BigInt(msgId);
             const sessionBint = BigInt(`0x${sessionToken}`);
 
-            if (msgIdBint % sessionBint !== BigInt(0)) return res.status(403).send({ error: "Unauthorized" });
+            if (msgIdBint % sessionBint !== BigInt(0)) return res.status(403).send({ error: "Unauthorised" });
 
             console.log(`✏️ Editing message ${msgId}`);
             message.msg = newMessage;
@@ -197,44 +198,52 @@ class Chat extends KittyRequest<ChatMessage> {
     }
 
     private encryptValue(value: string): string {
-        if (!CHAT_KEY) {
-            throw new Error("CHAT_KEY is missing. Ensure it is properly set.");
-        }
+        if (!CHAT_KEY) throw new Error("CHAT_KEY is missing. Ensure it is properly set.");
+        if (CHAT_KEY.length !== 32) throw new Error(`CHAT_KEY must be exactly 32 bytes, but got ${CHAT_KEY.length} bytes.`);
 
-        if (CHAT_KEY.length !== 32) {
-            throw new Error(`CHAT_KEY must be exactly 32 bytes, but got ${CHAT_KEY.length} bytes.`);
-        }
+        const iv = crypto.randomBytes(12); // GCM standard IV length
+        const cipher = crypto.createCipheriv("aes-256-gcm", CHAT_KEY, iv);
 
-        const iv = crypto.randomBytes(16);
-        const cipher = crypto.createCipheriv("aes-256-cbc", CHAT_KEY, iv);
         const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+        const tag = cipher.getAuthTag();
 
-        return iv.toString("hex") + ":" + encrypted.toString("hex");
+        // v2:iv:tag:ciphertext
+        return `v2:${iv.toString("hex")}:${tag.toString("hex")}:${encrypted.toString("hex")}`;
     }
 
     private decryptValue(encryptedValue: string): string {
         try {
+            if (!CHAT_KEY) throw new Error("CHAT_KEY is missing. Ensure it is properly set.");
+            if (CHAT_KEY.length !== 32) throw new Error(`CHAT_KEY must be exactly 32 bytes, but got ${CHAT_KEY.length} bytes.`);
+
             const parts = encryptedValue.split(":");
-            if (parts.length !== 2) throw new Error("Invalid encrypted format");
 
-            const iv = Buffer.from(parts[0], "hex");
-            const encryptedText = Buffer.from(parts[1], "hex");
+            if (parts.length === 4 && parts[0] === "v2") {
+                const iv = Buffer.from(parts[1], "hex");
+                const tag = Buffer.from(parts[2], "hex");
+                const encryptedText = Buffer.from(parts[3], "hex");
 
-            if (!CHAT_KEY) {
-                throw new Error("CHAT_KEY is missing. Ensure it is properly set.");
+                const decipher = crypto.createDecipheriv("aes-256-gcm", CHAT_KEY, iv);
+                decipher.setAuthTag(tag);
+
+                const decrypted = Buffer.concat([decipher.update(encryptedText), decipher.final()]);
+                return decrypted.toString("utf8");
             }
 
-            if (CHAT_KEY.length !== 32) {
-                throw new Error(`CHAT_KEY must be exactly 32 bytes, but got ${CHAT_KEY.length} bytes.`);
+            // Optional v1 CBC fallback: iv:ciphertext
+            if (parts.length === 2) {
+                const iv = Buffer.from(parts[0], "hex");
+                const encryptedText = Buffer.from(parts[1], "hex");
+
+                const decipher = crypto.createDecipheriv("aes-256-cbc", CHAT_KEY, iv);
+                const decrypted = Buffer.concat([decipher.update(encryptedText), decipher.final()]);
+                return decrypted.toString("utf8");
             }
 
-            const decipher = crypto.createDecipheriv("aes-256-cbc", CHAT_KEY, iv);
-            const decrypted = Buffer.concat([decipher.update(encryptedText), decipher.final()]);
-
-            return decrypted.toString("utf8");
+            throw new Error("Unknown encrypted format");
         } catch (error) {
             console.error("❌ ERROR: Decryption failed!", error);
-            return "ERROR"; // Handle decryption failure gracefully
+            return "ERROR";
         }
     }
 
@@ -259,6 +268,19 @@ class Chat extends KittyRequest<ChatMessage> {
             return this.messageCache;
         } catch (error) {
             console.error("❌ ERROR: Decryption failed!", error);
+            return [];
+        }
+    }
+
+    public loadEncryptedChat(): ChatMessage[] {
+        try {
+            if (!fs.existsSync(this.jsonFilePath)) return [];
+            const encryptedData = JSON.parse(fs.readFileSync(this.jsonFilePath, "utf-8"));
+
+            if (!Array.isArray(encryptedData)) return [];
+            return encryptedData as ChatMessage[];
+        } catch (error) {
+            console.error("❌ ERROR: Failed to read encrypted chat!", error);
             return [];
         }
     }

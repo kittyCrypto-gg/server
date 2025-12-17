@@ -1,34 +1,79 @@
 import { Request, Response } from "express";
 import fs from "fs";
 import Server from "./baseServer";
+import { tokenStore } from "./tokenStore";
+
+type TokenLocator = (req: Request) => string | null;
+
+type HandleRequestOpts = {
+    requireSessionToken?: boolean;
+    getSessionToken?: TokenLocator;
+    touchOnValid?: boolean;
+};
 
 class KittyRequest<T extends object> {
     protected server: Server;
     protected jsonFilePath: string;
     protected validateRequest: (data: unknown) => data is T;
-    protected static sessionTokens: Set<string>;
+    protected TokenStore: tokenStore;
 
-    constructor(
+    public constructor(
         server: Server,
         jsonFilePath: string,
-        sessionTokens: Set<string>,
+        TokenStore: tokenStore,
         validateRequest: (data: unknown) => data is T
     ) {
         this.server = server;
         this.jsonFilePath = jsonFilePath;
+        this.TokenStore = TokenStore;
         this.validateRequest = validateRequest;
-        KittyRequest.sessionTokens = sessionTokens;
     }
-
-
-    protected async handleRequest(req: Request, res: Response, action: (req: Request, res: Response, ...args: unknown[]) => Promise<object>, ...args: unknown[]): Promise<Response> {
+    
+    protected async handleRequest(
+        req: Request,
+        res: Response,
+        action: (req: Request, res: Response, ...args: unknown[]) => Promise<object>,
+        opts: HandleRequestOpts = {},
+        ...args: unknown[]
+    ): Promise<Response> {
         const body = req.body;
 
         if (!body || typeof body !== "object") {
             return res.status(400).json({ error: "Invalid request format." });
         }
 
-        //console.log(`🧳 Active session tokens: {\n  ${Array.from(KittyRequest.sessionTokens).join(",\n  ")}\n}`);
+        const {
+            requireSessionToken = false,
+            getSessionToken = (r: Request): string | null => {
+                const b = r.body as { sessionToken?: unknown };
+                return typeof b?.sessionToken === "string" ? b.sessionToken : null;
+            },
+            touchOnValid = true,
+        } = opts;
+
+        const store = this.TokenStore;
+
+        if (requireSessionToken) {
+            if (!store) return res.status(500).json({ error: "Token store not configured." });
+
+            try {
+                await store.waitUntilReady();
+            } catch {
+                return res.status(503).json({ error: "Server initialising. Try again." });
+            }
+
+            const token = getSessionToken(req);
+
+            if (!token) {
+                return res.status(422).json({ error: "Missing sessionToken." });
+            }
+
+            if (!store.tokenExistsAndValid(token)) {
+                return res.status(403).json({ error: "Session expired." });
+            }
+
+            if (touchOnValid) store.touchToken(token);
+        }
 
         try {
             const result = await action(req, res, ...args);
@@ -40,10 +85,10 @@ class KittyRequest<T extends object> {
 
             if (res.headersSent) {
                 console.warn("⚠️ Headers already sent, preventing duplicate response.");
-                return res; // Prevent duplicate response
+                return res;
             }
-            return res.status(200).json(result);
 
+            return res.status(200).json(result);
         } catch (error) {
             console.error("❌ Error processing request:", error);
 
@@ -51,8 +96,7 @@ class KittyRequest<T extends object> {
                 console.warn("⚠️ Headers already sent, preventing duplicate error response.");
                 return res;
             }
-            
-            // Distinguish different types of errors
+
             if (error instanceof Error) {
                 if (error.message.includes("Invalid request format")) {
                     return res.status(400).json({ error: error.message });
@@ -66,11 +110,6 @@ class KittyRequest<T extends object> {
         }
     }
 
-
-    public updateSessionTokens(newSessionTokens: Set<string>): void {
-        KittyRequest.sessionTokens = newSessionTokens;
-    }
-
     protected saveToFile(data: T): void {
         let fileData: T[] = [];
 
@@ -81,7 +120,7 @@ class KittyRequest<T extends object> {
                 if (!Array.isArray(fileData)) {
                     throw new Error("Invalid JSON format: Expected an array");
                 }
-            } catch (error) {
+            } catch {
                 console.warn(`Error reading/parsing ${this.jsonFilePath}. Resetting file.`);
                 fileData = [];
             }
@@ -89,6 +128,10 @@ class KittyRequest<T extends object> {
 
         fileData.push(data);
         fs.writeFileSync(this.jsonFilePath, JSON.stringify(fileData, null, 2), "utf-8");
+    }
+
+    public get sessionTokens(): Set<string> {
+        return this.TokenStore ? this.TokenStore['sessionTokens'] : new Set<string>();
     }
 }
 

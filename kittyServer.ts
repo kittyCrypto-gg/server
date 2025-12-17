@@ -5,12 +5,13 @@ import Renderer from "./kittyWebsite";
 import Comment from "./kittyComment";
 import { CommentData } from "./kittyComment";
 import cors from "cors";
-import { promises } from "fs";
+import fs from "fs";
 import crypto from "crypto";
 import { Request, Response } from "express";
 import KittyRequest from "./kittyRequest";
 import { GithubAutoScheduler } from "./blogScheduler";
 import fetch from "node-fetch"
+import { tokenStore } from "./tokenStore";
 
 // Server Configuration
 const HOST = process.env.HOST;
@@ -28,6 +29,13 @@ if (isNaN(PORT) || PORT <= 0 || PORT > 65535) {
 }
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+
+type SseClient = {
+    res: Response;
+    hasKey: boolean;
+};
+
+const clients: SseClient[] = [];
 
 async function getChapters(storyPath: string): Promise<{ chapters: number[], urls: string[] }> {
     const chapters: number[] = [];
@@ -63,17 +71,16 @@ async function getChapters(storyPath: string): Promise<{ chapters: number[], url
     return { chapters, urls };
 }
 
-
 // Helper: Get all HTML files at repo root (and subdirs if needed)
 async function getHtmlPagesFromGithub(repoOwner: string, repoName: string, dir: string = ""): Promise<string[]> {
     const apiUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/contents/${dir}`;
-    
+
     const headers: Record<string, string> = { "User-Agent": "kitty-sitemap-bot" };
 
     if (GITHUB_TOKEN) headers["Authorization"] = `Bearer ${GITHUB_TOKEN}`;
 
     const res = await fetch(apiUrl, { headers });
-    
+
     if (!res.ok) throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
     const items = await res.json();
     let urls: string[] = [];
@@ -89,7 +96,8 @@ async function getHtmlPagesFromGithub(repoOwner: string, repoName: string, dir: 
 }
 
 // Chat JSON File Path
-const chat_json_path = path.join(__dirname, "chat.json");
+//const chat_json_path = path.join(__dirname, "chat.json");
+const chat_json_path = path.join(__dirname, "chat.gcm.json");
 // console.log(`Chat JSON File Path: ${chat_json_path}`);
 
 // Comments JSON File Path
@@ -122,12 +130,21 @@ server.app.use(
 // Session store to track active sessions
 const sessionTokens = new Set<string>();
 
-const requestHandler = new KittyRequest(server, "none", sessionTokens, (data: unknown): data is object => true);
-const chat = new Chat(server, chat_json_path, sessionTokens);
-const comment = new Comment(server, sessionTokens);
+const TokenStore = new tokenStore(
+    server,
+    sessionTokens,
+    (_tokens) => { }
+);
 
-// Store SSE clients
-const clients: Response[] = [];
+TokenStore.init();
+
+const chat = new Chat(server, chat_json_path, TokenStore);
+const comment = new Comment(server, comments_json_path, TokenStore);
+
+const requestHandler = new KittyRequest(server, "null", TokenStore, (_data): _data is {} => true);
+
+// // Store SSE clients
+// const clients: Response[] = [];
 
 // Generate a secure session token
 function generateSessionToken(): string {
@@ -135,11 +152,47 @@ function generateSessionToken(): string {
 }
 
 // Endpoint to request a session token
-server.app.get("/session-token", (req: Request, res: Response) => {
+server.app.get("/session-token", async (req: Request, res: Response) => {
+
+    try {
+        await TokenStore.waitUntilReady();
+    } catch {
+        res.status(503).json({ error: "Server initialising. Try again." });
+        return;
+    }
+
     const sessionToken = generateSessionToken();
-    sessionTokens.add(sessionToken);
+    TokenStore.touchToken(sessionToken);
     res.json({ sessionToken });
-    requestHandler.updateSessionTokens(sessionTokens);
+});
+
+server.app.post("/session-token/reregister", async (req: Request, res: Response) => {
+    try {
+        await TokenStore.waitUntilReady();
+    } catch {
+        res.status(503).json({ error: "Server initialising. Try again." });
+        return;
+    }
+
+    const sessionToken = typeof req.body?.sessionToken === "string" ? req.body.sessionToken : "";
+
+    if (!sessionToken) {
+        res.status(422).json({ error: "Missing sessionToken." });
+        return;
+    }
+
+    if (!TokenStore.tokenExistsAndValid(sessionToken)) {
+        res.status(403).json({ error: "Session expired." });
+        return;
+    }
+
+    TokenStore.touchToken(sessionToken);
+
+    res.status(200).json({
+        ok: true,
+        sessionToken,
+        expiresAtMs: TokenStore.getExpiryMs(sessionToken),
+    });
 });
 
 // Helper function to extract and normalise IP
@@ -151,7 +204,7 @@ function getClientIp(req: Request): string {
 
 // Endpoint: Get Raw IP
 server.app.get("/get-ip", cors({ origin: "*" }), (req: Request, res: Response) => {
-  res.json({ ip: getClientIp(req) });
+    res.json({ ip: getClientIp(req) });
 });
 
 // Endpoint: Get Hashed IP
@@ -165,14 +218,32 @@ server.app.get("/get-ip/sha256", cors({ origin: "*" }), (req: Request, res: Resp
     }
 });
 
-// SSE Endpoint: Clients Subscribe to Chat Updates
-server.app.get("/chat/stream", (req: Request, res: Response) => {
-    const token = req.query.token as string;
-    if (!token || !sessionTokens.has(token)) {
-        res.setHeader("Content-Type", "application/json");
-        res.json([{ nick: "system", id: "0x0000000000", msg: "Session expired. Refresh page to reconnect." }]);
+function originAllowsDecrypted(origin: string | undefined): boolean {
+    if (!origin) return false;      // your rule: no Origin => encrypted
+    if (origin === "null") return false;
+    return server.allowedOriginsList.includes(origin);
+}
+
+server.app.get("/chat/stream", async (req: Request, res: Response) => {
+
+    try {
+        await TokenStore.waitUntilReady();
+    } catch {
+        res.status(503).json([{ nick: "system", id: "0x0000000000", msg: "Server initialising. Try again." }]);
         return;
     }
+
+    const token = req.query.token as string | undefined;
+
+    if (!token || !TokenStore.tokenExistsAndValid(token)) {
+        res.status(403).json([{ nick: "system", id: "0x0000000000", msg: "Session expired. Refresh page to reconnect." }]);
+        return;
+    }
+
+    TokenStore.touchToken(token);
+
+    const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+    const wantsDecrypted = originAllowsDecrypted(origin);
 
     res.setHeader("X-Accel-Buffering", "no");
     res.setHeader("Content-Encoding", "identity");
@@ -181,16 +252,14 @@ server.app.get("/chat/stream", (req: Request, res: Response) => {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders();
 
-    console.log("🔗 New SSE connection established.");
+    const initial = wantsDecrypted ? chat.loadAndDecryptChat() : chat.loadEncryptedChat();
+    res.write(`data: ${JSON.stringify(initial)}\n\n`);
 
-    const fullChatHistory = JSON.stringify(chat.loadAndDecryptChat());
-
-    res.write(`data: ${fullChatHistory}\n\n`);
-    clients.push(res);
+    clients.push({ res, hasKey: wantsDecrypted });
 
     req.on("close", () => {
-        console.log("🔌 SSE client disconnected.");
-        clients.splice(clients.indexOf(res), 1);
+        const idx = clients.findIndex(c => c.res === res);
+        if (idx !== -1) clients.splice(idx, 1);
     });
 });
 
@@ -204,17 +273,15 @@ server.app.get("/comments/load", (req: Request, res: Response) => {
             return res.status(400).json({ error: "Missing or invalid 'page' query parameter." });
         }
 
-        const commentPath = comments_json_path;
-
         try {
-            if (!await promises.stat(commentPath).then(() => true).catch(() => false)) {
+            if (!await fs.promises.stat(comments_json_path).then(() => true).catch(() => false)) {
                 return res.status(200).json([]);
             }
 
-            const rawData = await promises.readFile(commentPath, "utf-8");
+            const rawData = await fs.promises.readFile(comments_json_path, "utf-8");
             const allComments = JSON.parse(rawData);
 
-            //console.log(`📜 Loaded ${allComments.length} comments from ${commentPath}`);
+            //console.log(`📜 Loaded ${allComments.length} comments from ${comments_json_path}`);
             //console.log(`🔍 All comments: ${JSON.stringify(allComments)}`);
 
             if (!Array.isArray(allComments)) {
@@ -237,18 +304,21 @@ server.app.get("/comments/load", (req: Request, res: Response) => {
 
 // Notify SSE Clients When New Chat Messages Arrive
 function notifyClients() {
-    const decryptedChat = chat.loadAndDecryptChat();
-    clients.forEach((client) => {
-        client.write(`data: ${JSON.stringify(decryptedChat)}\n\n`);
-    });
+    const decrypted = chat.loadAndDecryptChat();
+    const encrypted = chat.loadEncryptedChat();
+
+    for (const c of clients) {
+        const payload = c.hasKey ? decrypted : encrypted;
+        c.res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    }
 }
 
-// asynchronously track changes in chat.json every 1 second and update clients if changes are detected (use promises from fs)
+// asynchronously track changes in chat.json every 1 second and update clients if changes are detected (use fs.promises from fs)
 async function trackChatChanges() {
-    let lastChatData = await promises.readFile(chat_json_path, "utf-8");
+    let lastChatData = await fs.promises.readFile(chat_json_path, "utf-8");
     console.log(`📔 Tracking chat changes in ${chat_json_path}`);
     setInterval(async () => {
-        const newChatData = await promises.readFile(chat_json_path, "utf-8");
+        const newChatData = await fs.promises.readFile(chat_json_path, "utf-8");
         if (newChatData !== lastChatData) {
             chat.clearMessageCache();
             lastChatData = newChatData;
@@ -276,6 +346,113 @@ server.app.get('/robots.txt', (req, res) => { // Serve robots.txt
             Host: render.kittycrypto.gg`
     );
 });
+
+const storiesRoot = path.resolve(__dirname, "stories");
+
+type StoriesIndex = Record<string, string[]>;
+
+async function exploreStories(): Promise<StoriesIndex> {
+
+    const out: StoriesIndex = {};
+
+    const isStoryDirName = (name: string): boolean => {
+        return /^[a-zA-Z0-9 _-]+$/.test(name);
+    }
+
+    const isChapterXml = (name: string): boolean => {
+        return /^chapt\d+\.xml$/i.test(name);
+    }
+
+    const entries = await fs.promises.readdir(storiesRoot, { withFileTypes: true });
+    const storyDirs = entries.filter((e) => e.isDirectory() && isStoryDirName(e.name));
+
+    for (const dir of storyDirs) {
+        const storyPath = path.join(storiesRoot, dir.name);
+        const files = await fs.promises.readdir(storyPath, { withFileTypes: true });
+
+        const chapters = files
+            .filter((f) => f.isFile() && isChapterXml(f.name))
+            .map((f) => f.name)
+            .sort((a, b) => {
+                const na = Number((a.match(/^chapt(\d+)\.xml$/i) ?? ["", "0"])[1]);
+                const nb = Number((b.match(/^chapt(\d+)\.xml$/i) ?? ["", "0"])[1]);
+                return na - nb;
+            });
+
+        out[dir.name] = chapters;
+    }
+
+    return out;
+}
+
+async function resolveStoryPath(rest: string): Promise<string | null> {
+
+    let cleaned: string;
+    try {
+        cleaned = decodeURIComponent(rest);
+    } catch {
+        return null;
+    }
+
+    cleaned = cleaned
+        .replace(/^\/+/, "")
+        .replace(/\\/g, "/")
+        .replace(/\/+/g, "/");
+
+    if (!cleaned) return null;
+
+    const segments = cleaned.split("/");
+
+    for (const seg of segments) {
+        if (!seg) return null;
+        if (seg === "." || seg === "..") return null;
+        if (!/^[a-zA-Z0-9._ + -]+$/.test(seg)) return null;
+    }
+
+    const filePath = path.resolve(storiesRoot, ...segments);
+
+    const rel = path.relative(storiesRoot, filePath);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+
+    try {
+        const stat = await fs.promises.stat(filePath);
+        if (!stat.isFile()) return null;
+
+        await fs.promises.access(filePath, fs.constants.R_OK);
+    } catch {
+        return null;
+    }
+
+    return filePath;
+}
+
+server.app.get("/stories.json", async (_req: Request, res: Response) => {
+    try {
+        const index = await exploreStories();
+        res.json(index);
+    } catch {
+        res.status(500).json({ error: "Failed to generate stories index." });
+    }
+});
+
+server.app.get(/^\/stories\/(.+)$/, async (req: Request, res: Response) => {
+    const rest = req.params[0] ?? "";
+    const filePath = await resolveStoryPath(rest);
+
+    if (!filePath) {
+        res.status(404).send("Not found.");
+        return;
+    }
+
+    if (filePath.toLowerCase().endsWith(".xml")) {
+        res.type("application/xml");
+        fs.createReadStream(filePath).pipe(res);
+        return;
+    }
+
+    res.sendFile(filePath);
+});
+
 
 server.app.get(["/sitemap.xml", "/website/sitemap.xml"], async (req, res) => {
     try {
