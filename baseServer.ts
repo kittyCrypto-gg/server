@@ -17,7 +17,10 @@ class Server {
   protected certificatePath = process.env.CERT_PATH || undefined;
   protected chainPath = process.env.CHAIN_PATH || undefined;
 
-  private allowedOrigins = new Set<string>(["https://kittycrypto.gg", "http://localhost"]);
+  private allowedOrigins = new Set<string>([
+    "http://localhost"
+  ]);
+
   private allowedMethods = new Set<methods>(["GET"]);
 
   public get baseUrl(): string {
@@ -26,8 +29,18 @@ class Server {
     return `https://${host}:${port}`;
   }
 
-  constructor(host: string, port?: number) {
+  public addAllowedOrigins(origin: string | string[]): void {
+    if (Array.isArray(origin)) {
+      origin.forEach(o => this.allowedOrigins.add(o));
+    } else {
+      this.allowedOrigins.add(origin);
+    }
+  }
+
+  constructor(host: string, port?: number, allowedOrigins?: string | string[]) {
     this.host = host;
+
+    allowedOrigins ? this.addAllowedOrigins(allowedOrigins) : null;
 
     if (!this.privateKeyPath || !this.certificatePath || !this.chainPath) {
       console.warn("Warning: SSL certificate paths are not fully set in environment variables. Aborting.");
@@ -45,7 +58,7 @@ class Server {
     this.app.use(bodyParser.json());
     this.server = https.createServer(sslOptions, this.app);
 
-    
+
 
     this.port = port;
 
@@ -101,6 +114,13 @@ class Server {
   }
 
   public logEndpoints() {
+    const router = (this.app as any)._router;
+
+    if (!router || !Array.isArray(router.stack)) {
+      console.warn("⚠️ Express router not initialised yet");
+      return;
+    }
+
     interface Middleware {
       route?: {
         path: string;
@@ -108,17 +128,21 @@ class Server {
       };
       name?: string;
       handle?: {
-        stack: Middleware[];
+        stack?: Middleware[];
       };
     }
 
-    (this.app._router.stack as Middleware[]).forEach((middleware: Middleware) => {
+    router.stack.forEach((middleware: Middleware) => {
       if (middleware.route) {
-        console.log(`Endpoint: https://${this.host}:${this.port}${middleware.route.path}, Method: ${Object.keys(middleware.route.methods).join(', ').toUpperCase()}`);
-      } else if (middleware.name === 'router') {
-        middleware.handle?.stack.forEach((handler: Middleware) => {
+        console.log(
+          `Endpoint: https://${this.host}:${this.port}${middleware.route.path}, Method: ${Object.keys(middleware.route.methods).join(", ").toUpperCase()}`
+        );
+      } else if (middleware.name === "router" && Array.isArray(middleware.handle?.stack)) {
+        middleware.handle.stack.forEach((handler: Middleware) => {
           if (handler.route) {
-            console.log(`Endpoint: https://${this.host}:${this.port}${handler.route.path}, Method: ${Object.keys(handler.route.methods).join(', ').toUpperCase()}`);
+            console.log(
+              `Endpoint: https://${this.host}:${this.port}${handler.route.path}, Method: ${Object.keys(handler.route.methods).join(", ").toUpperCase()}`
+            );
           }
         });
       }

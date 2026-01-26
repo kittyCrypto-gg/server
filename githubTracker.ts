@@ -2,6 +2,12 @@ import fetch from 'node-fetch';
 import { writeFile, mkdir, access, constants, readdir, readFile } from 'fs/promises';
 import path from 'path';
 
+interface GitHubContentFile {
+  sha: string;
+  content: string;
+  encoding: string;
+}
+
 type RepoIdentifier = string;
 type CommitSummary = {
   sha: string;
@@ -125,10 +131,13 @@ export class GirhubTracker {
       }
 
       // --- Only include new commits ---
-      const startIdx = lastSha
+      let startIdx = lastSha
         ? commits.findIndex(c => c.sha === lastSha) + 1
         : 0;
-      if (startIdx < 0 || startIdx >= commits.length) continue;
+      const lastIdx = lastSha ? commits.findIndex(c => c.sha === lastSha) : -1;
+      if (lastSha && lastIdx === -1) continue; // cannot safely determine "new"
+      startIdx = lastIdx + 1;
+
 
       // --- Sub-version bump logic ---
       let currentMajor = lastMajor;
@@ -179,7 +188,19 @@ export class GirhubTracker {
       console.log('Error response:', errorText);
       return { major: 0, readmeSha: '' };
     }
-    const data = await resp.json();
+    const raw: unknown = await resp.json();
+
+    if (
+      typeof raw !== 'object' ||
+      raw === null ||
+      typeof (raw as GitHubContentFile).content !== 'string' ||
+      typeof (raw as GitHubContentFile).sha !== 'string'
+    ) {
+      return { major: 0, readmeSha: '' };
+    }
+
+    const data = raw as GitHubContentFile;
+
     const content = Buffer.from(data.content, 'base64').toString('utf-8');
     const match = content.match(/\$\{V(\d+)\}/);
     const major = match ? parseInt(match[1], 10) : 0;
@@ -250,7 +271,7 @@ export class GirhubTracker {
           const match = content.match(/\$\{V(\d+)\}/);
           if (match) commitMajor = parseInt(match[1], 10);
         }
-      } catch {}
+      } catch { }
 
       summaries.push({
         sha,

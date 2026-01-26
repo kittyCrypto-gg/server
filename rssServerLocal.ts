@@ -36,7 +36,15 @@ class RssServerLocal extends RssServer {
     private localFeedDescription: string = "Personal posts from Kitty’s blog";
 
     constructor(host: string, port?: number) {
-        super(host, port);
+        
+        const allowedOrigins = [
+            "https://kittycrypto.gg",
+            "https://www.kittycrypto.gg",
+            "https://test.kittycrypto.gg",
+            "https://render.kittycrypto.gg"
+        ];
+
+        super(host, port, allowedOrigins);
         this.registerLocalBlogRoute();
     }
 

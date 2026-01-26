@@ -75,7 +75,7 @@ export class autoBlogger {
   }
 
   // Recursively split a JSON log into valid JSON chunks, each under the specified token limit.
-    private splitJsonByCommitsRecursive(
+  private splitJsonByCommitsRecursive(
     json: CommitLog,
     maxTokens: number,
     systemPromptTokens: number,
@@ -129,10 +129,21 @@ export class autoBlogger {
     return result;
   }
 
-  private static extractTokenCountFromError(err: OpenAIAPIErrorShape): number | null {
-    const msg = err?.error?.message || '';
+  private static extractTokenCountFromError(err: unknown): number | null {
+    if (!err || typeof err !== "object") return null;
+
+    const errAny = err as {
+      message?: unknown;
+      error?: { message?: unknown };
+    };
+
+    const msg =
+      (typeof errAny.error?.message === "string" && errAny.error.message) ||
+      (typeof errAny.message === "string" && errAny.message) ||
+      "";
+
     const match = msg.match(/resulted in (\d+) tokens/);
-    return match ? parseInt(match[1], 10) : null;
+    return match ? Number(match[1]) : null;
   }
 
   private async mergeSummariesToSingle(summaryArray: string[], user = "Kitty"): Promise<string> {
@@ -145,7 +156,7 @@ export class autoBlogger {
       + summaryArray.map((s, i) => `--- Summary ${i + 1} ---\n${s.trim()}\n`).join('\n');
 
     const response = await this.openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5-mini",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
@@ -201,13 +212,17 @@ export class autoBlogger {
       const maxModelTokens = 128000;
       const safetyBuffer = 2048; // a bit more conservative!
       const responseBuffer = 1024; // headroom for model's reply
-      const maxTokensPerChunk = Math.max(
+      const hardCapChunkTokens = 48_000;
+
+      const derivedCap = Math.max(
         2048,
         Math.min(
-          offendingTokens - safetyBuffer - responseBuffer,
+          (offendingTokens ?? maxModelTokens) - safetyBuffer - responseBuffer,
           maxModelTokens - safetyBuffer - responseBuffer
         )
       );
+
+      const maxTokensPerChunk = Math.min(hardCapChunkTokens, derivedCap);
 
       // Recursively split the commit log into safe chunks
       const chunks = this.splitJsonByCommitsRecursive(
@@ -234,20 +249,27 @@ export class autoBlogger {
           summary = response.choices[0].message.content ?? "";
         } catch (chunkErr) {
           // If this chunk still fails, try recursively splitting further
-          const tokens = autoBlogger.extractTokenCountFromError(chunkErr as OpenAIAPIErrorShape) ?? maxTokensPerChunk;
-          if (tokens < 2048) throw chunkErr; // Give up if just too small
-          const systemPromptTokens2 = systemPromptTokens;
-          const userPromptTokens2 = userPromptTokens;
+          const tokensFromError = autoBlogger.extractTokenCountFromError(chunkErr);
+          const tokens = tokensFromError ?? maxTokensPerChunk;
+          if (tokens < 2048) throw chunkErr;
+
           const subResponseBuffer = 1024;
+          const hardCapChunkTokens = 48_000;
+
+          const subMaxTokensPerChunk = Math.min(
+            hardCapChunkTokens,
+            Math.max(2048, tokens - 4096 - subResponseBuffer)
+          );
+
           const subChunks = this.splitJsonByCommitsRecursive(
-            JSON.parse(chunk),
-            Math.max(1024, tokens - subResponseBuffer),
-            systemPromptTokens2,
-            userPromptTokens2
+            JSON.parse(chunk) as CommitLog,
+            subMaxTokensPerChunk,
+            systemPromptTokens,
+            userPromptTokens
           );
           for (const subChunk of subChunks) {
             const response = await this.openai.chat.completions.create({
-              model: "gpt-4o-mini",
+              model: "gpt-4.o-mini",
               messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPromptBase + `\n${subChunk}` }

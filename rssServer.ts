@@ -42,8 +42,8 @@ class RssServer extends Server {
     private feeds: Map<string, Feed>;
     private aiParser: aiParser;
 
-    constructor(host: string, port?: number) {
-        super(host, port);
+    constructor(host: string, port?: number, allowedOrigins?: string | string[]) {
+        super(host, port, allowedOrigins);
         this.feeds = new Map();
         this.aiParser = new aiParser(process.env.OPENAI_KEY!);
 

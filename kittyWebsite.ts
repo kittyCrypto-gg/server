@@ -7,7 +7,7 @@ class KittyWebsite {
 
   constructor(server: Server) {
     try {
-      server.app.get("/website/:path(*)", this.handleRender.bind(this));
+      server.app.get("/website/*path", this.handleRender.bind(this));
       server.app.get("/website", this.handleRender.bind(this));
       this.ready = true;
     } catch (error) {

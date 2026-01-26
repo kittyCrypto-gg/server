@@ -13,6 +13,13 @@ import { GithubAutoScheduler } from "./blogScheduler";
 import fetch from "node-fetch"
 import { tokenStore } from "./tokenStore";
 
+
+type GithubContentItem = {
+    type: "file" | "dir";
+    name: string;
+    path: string;
+};
+
 // Server Configuration
 const HOST = process.env.HOST;
 
@@ -82,7 +89,7 @@ async function getHtmlPagesFromGithub(repoOwner: string, repoName: string, dir: 
     const res = await fetch(apiUrl, { headers });
 
     if (!res.ok) throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
-    const items = await res.json();
+    const items = await res.json() as GithubContentItem[];
     let urls: string[] = [];
     for (const item of items) {
         if (item.type === "file" && item.name.endsWith(".html")) {
@@ -104,28 +111,17 @@ const chat_json_path = path.join(__dirname, "chat.gcm.json");
 const comments_json_path = path.join(__dirname, "comments.json");
 // console.log(`Comments JSON File Path: ${comments_json_path}`);
 
-// Initialise the HTTPS server
-const server = new Server(HOST, PORT);
+const allowedOrigins = [
+    "https://kittycrypto.gg",
+    "https://render.kittycrypto.gg",
+    "https://test.kittycrypto.gg",
+    "https://api.kittycrypto.gg",
+    "https://app.kittycrypto.gg",
+    "http://localhost:8000",
+];
 
-server.app.use(
-    cors({
-        origin: (origin, callback) => {
-            const allowedOrigins = [
-                "https://kittycrypto.gg",
-                "https://render.kittycrypto.gg",
-                "https://hostel4pets.co.uk"
-            ];
-            if (!origin || allowedOrigins.includes(origin)) {
-                callback(null, true);
-            } else {
-                callback(new Error("Not allowed by CORS"));
-            }
-        },
-        methods: ["GET", "POST", "DELETE"],
-        allowedHeaders: ["Content-Type", "Authorization"],
-        credentials: true,
-    })
-);
+// Initialise the HTTPS server
+const server = new Server(HOST, PORT, allowedOrigins);
 
 // Session store to track active sessions
 const sessionTokens = new Set<string>();
@@ -459,7 +455,7 @@ server.app.get(["/sitemap.xml", "/website/sitemap.xml"], async (req, res) => {
         const githubPages = await getHtmlPagesFromGithub("kittyCrypto-gg", "website");
 
         const storiesRes = await fetch("https://kittycrypto.gg/scripts/stories.json");
-        const stories: Record<string, string> = await storiesRes.json();
+        const stories = await storiesRes.json() as Record<string, string>;
 
         const storyChapterLinks: string[] = [];
         for (const [storyName, storyPath] of Object.entries(stories)) {
@@ -517,4 +513,4 @@ console.log(renderer.readyMessage());
 
 console.log(`🚀 Kitty Server is running on https://${HOST}:${PORT}`);
 
-//blogger.runOnceNow();
+blogger.runOnceNow();
