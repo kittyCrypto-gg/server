@@ -500,6 +500,49 @@ server.app.get(["/sitemap.xml", "/website/sitemap.xml"], async (req, res) => {
     }
 });
 
+const allowedSourcesPath = path.join(__dirname, "data", "allowedSources.json");
+
+server.app.get("/allowedSources.json", async (_req: Request, res: Response) => {
+    try {
+        const raw = await fs.promises.readFile(allowedSourcesPath, "utf-8");
+        const parsed = JSON.parse(raw);
+
+        const list = parsed && Array.isArray(parsed.sources)
+            ? parsed.sources
+            : [];
+
+        const set = new Set<string>();
+
+        for (const value of list) {
+            if (typeof value !== "string") continue;
+
+            let u: URL;
+            try {
+                u = new URL(value);
+            } catch {
+                continue;
+            }
+
+            if (u.protocol !== "https:") continue;
+            if (u.username || u.password) continue;
+
+            set.add(u.toString());
+        }
+
+        res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300");
+        res.json({
+            updatedAt: new Date().toISOString(),
+            sources: Array.from(set)
+        });
+    } catch (err) {
+        console.error("❌ /allowedSources.json failed:", err);
+        res.status(500).json({
+            error: "Failed to load allowlist",
+            sources: []
+        });
+    }
+});
+
 const renderer = new Renderer(server);
 
 server.start();
