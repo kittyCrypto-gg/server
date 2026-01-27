@@ -1,5 +1,6 @@
 {
   "name": "external-proxy",
   "main": "dist/worker.js",
-  "compatibility_date": "2026-01-27"
+  "compatibility_date": "2026-01-27",
+  "no_bundle": true
 }
