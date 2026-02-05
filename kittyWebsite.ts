@@ -194,6 +194,26 @@ class KittyWebsite {
     return match ? match[1] : "";
   }
 
+  private static kittyScript(abs: string, ctx: RewriteContext): string {
+    let u: URL;
+    try {
+      u = new URL(abs);
+    } catch {
+      return abs;
+    }
+
+    if (u.origin !== ctx.kittyOrigin) return abs;
+
+    // If it is already in /scripts, keep it.
+    if (u.pathname.startsWith("/scripts/")) return u.toString();
+
+    // Treat any root-level script path as living under /scripts instead.
+    const file = u.pathname.startsWith("/") ? u.pathname.slice(1) : u.pathname;
+    u.pathname = `/scripts/${file}`;
+
+    return u.toString();
+  }
+
   private static parseScriptsFromSection(sectionHtml: string, placement: "head" | "body", ctx: RewriteContext): ScriptItem[] {
     const items: ScriptItem[] = [];
     const re = /<script\b([\s\S]*?)>([\s\S]*?)<\/script\s*>/gi;
@@ -212,7 +232,8 @@ class KittyWebsite {
       const srcAbs = (() => {
         if (!srcRaw) return null;
         try {
-          return new URL(srcRaw, ctx.pageUrl).href;
+          const abs = new URL(srcRaw, ctx.pageUrl).href;
+          return KittyWebsite.kittyScript(abs, ctx);
         } catch {
           return null;
         }
