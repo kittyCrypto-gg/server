@@ -1,3 +1,9 @@
+const KITTYSITE_ORIGIN = "https://kittycrypto.gg";
+
+function isKittyOrigin(url: URL): boolean {
+    return url.origin === KITTYSITE_ORIGIN;
+}
+
 type CfCacheOptions = {
     cacheEverything?: boolean;
     cacheTtl?: number;
@@ -106,14 +112,22 @@ const worker = {
             return new Response("Missing ?src=", { status: 400 });
         }
 
-        const allowlist = await getAllowedUrls();
-        if (!allowlist.has(srcUrl)) {
-            return new Response("Blocked: src not allowlisted", { status: 403 });
-        }
-
         const upstreamUrl = safeHttpsUrl(srcUrl);
         if (upstreamUrl === null) {
             return new Response("Blocked: invalid upstream URL", { status: 403 });
+        }
+
+        const upstreamParsed = new URL(upstreamUrl);
+        const kittyBypass = isKittyOrigin(upstreamParsed);
+
+        if (!kittyBypass) {
+            const allowlist = await getAllowedUrls();
+            const canonical = upstreamParsed.toString();
+            const allowed = allowlist.has(srcUrl) || allowlist.has(canonical);
+
+            if (!allowed) {
+                return new Response("Blocked: src not allowlisted", { status: 403 });
+            }
         }
 
         const upstreamInit: CloudflareRequestInit = {
@@ -121,11 +135,11 @@ const worker = {
             cf: {
                 cacheEverything: true,
                 cacheTtl: 60 * 60 * 24,
-                cacheKey: `external:${srcUrl}`
+                cacheKey: `external:${upstreamParsed.toString()}`
             }
         };
 
-        const upstreamRes = await fetch(upstreamUrl, upstreamInit);
+        const upstreamRes = await fetch(upstreamParsed.toString(), upstreamInit);
 
         if (!upstreamRes.ok) {
             return new Response(`Upstream failed: ${upstreamRes.status}`, { status: 502 });

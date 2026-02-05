@@ -12,6 +12,8 @@ import KittyRequest from "./kittyRequest";
 import { GithubAutoScheduler } from "./blogScheduler";
 import fetch from "node-fetch"
 import { tokenStore } from "./tokenStore";
+import argon2 from "argon2"
+import express from "express"
 
 
 type GithubContentItem = {
@@ -37,12 +39,158 @@ if (isNaN(PORT) || PORT <= 0 || PORT > 65535) {
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
+const chatbot_PATH = path.join(__dirname, "chatbot_users.gcm.json")
+const CHATBOT_API_KEY = process.env.CHATBOT_API_KEY
+
+if (!CHATBOT_API_KEY) {
+    console.error("❌ CHATBOT_API_KEY not set")
+    process.exit(1)
+}
+
 type SseClient = {
     res: Response;
     hasKey: boolean;
 };
 
 const clients: SseClient[] = [];
+
+async function updateUsersFile(
+    mutate: (doc: any) => void,
+    retries = 5
+): Promise<void> {
+    for (let i = 0; i < retries; i++) {
+        let doc: any
+
+        try {
+            const raw = await fs.promises.readFile(chatbot_PATH, "utf8")
+
+            if (!raw.trim()) {
+                throw new Error("Empty users file")
+            }
+
+            doc = JSON.parse(raw)
+        } catch {
+            console.warn("Users file missing, empty, or invalid, initialising new store")
+
+            doc = {
+                version: 0,
+                updatedAt: new Date().toISOString(),
+                users: []
+            }
+        }
+
+        const baseVersion =
+            typeof doc.version === "number" ? doc.version : 0
+
+        mutate(doc)
+
+        doc.version = baseVersion + 1
+        doc.updatedAt = new Date().toISOString()
+
+        const tmp = `${chatbot_PATH}.${process.pid}.${Date.now()}.tmp`
+
+        await fs.promises.writeFile(
+            tmp,
+            JSON.stringify(doc, null, 2),
+            "utf8"
+        )
+
+        try {
+            await fs.promises.rename(tmp, chatbot_PATH)
+            return
+        } catch {
+            await fs.promises.unlink(tmp).catch(() => { })
+        }
+    }
+
+    throw new Error("Failed to commit user file after multiple retries")
+}
+
+function registerPage(error = "", apiKey = "") {
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Register User</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+        <style>
+        body {
+          background: #0f172a;
+          color: #e5e7eb;
+          font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          height: 100vh;
+          margin: 0;
+        }
+        .card {
+          background: #020617;
+          padding: 2rem;
+          border-radius: 12px;
+          width: 100%;
+          max-width: 360px;
+          box-shadow: 0 0 40px rgba(0,0,0,.7);
+        }
+        .card input,
+        .card button {
+          box-sizing: border-box;
+        }
+        h1 {
+          text-align: center;
+          margin-bottom: 1rem;
+        }
+        input {
+          width: 100%;
+          padding: 14px;
+          margin-top: 10px;
+          border-radius: 6px;
+          border: none;
+          background: #020617;
+          color: white;
+          font-size: 16px;
+        }
+        button {
+          width: 100%;
+          margin-top: 20px;
+          padding: 14px;
+          background: #16a34a;
+          border: none;
+          border-radius: 6px;
+          color: white;
+          font-weight: bold;
+          font-size: 16px;
+        }
+        .error {
+          color: #f87171;
+          text-align: center;
+          margin-top: 12px;
+        }
+        </style>
+      </head>
+      <body>
+        <form class="card" method="POST">
+          <!-- Hidden relay field -->
+          <input type="hidden" name="apiKey" value="${apiKey}">
+  
+          <h1>Register</h1>
+          <input name="username" placeholder="Username" required />
+          <input name="password" type="password" placeholder="Password" required />
+          <button type="submit">Create User</button>
+  
+          <div style="margin-top: 10px; font-size: 13px; color: #94a3b8;">
+            API key seen by server:
+            <code style="display: block; margin-top: 6px; padding: 8px; background: #0f172a; border-radius: 6px; word-break: break-all;">
+              ${apiKey || "(empty)"}
+            </code>
+          </div>
+  
+          ${error ? `<div class="error">${error}</div>` : ""}
+        </form>
+      </body>
+      </html>
+    `;
+}
 
 async function getChapters(storyPath: string): Promise<{ chapters: number[], urls: string[] }> {
     const chapters: number[] = [];
@@ -117,11 +265,17 @@ const allowedOrigins = [
     "https://test.kittycrypto.gg",
     "https://api.kittycrypto.gg",
     "https://app.kittycrypto.gg",
+    "https://chat.kittycrypto.gg",
+    "https://srv.kittycrypto.gg",
     "http://localhost:8000",
 ];
 
 // Initialise the HTTPS server
 const server = new Server(HOST, PORT, allowedOrigins);
+
+server.app.use(express.urlencoded({ extended: false }))
+server.app.use(express.json())
+server.app.set("trust proxy", true)
 
 // Session store to track active sessions
 const sessionTokens = new Set<string>();
@@ -542,6 +696,159 @@ server.app.get("/allowedSources.json", async (_req: Request, res: Response) => {
         });
     }
 });
+
+server.app.all("/chatbot/register", async (req: Request, res: Response) => {
+    // console.log("=== /chatbot/register ===");
+    // console.log("Method:", req.method);
+    // console.log("URL:", req.originalUrl || req.url);
+    // console.log("Headers:");
+
+    // for (const [k, v] of Object.entries(req.headers)) {
+    //     console.log(`  ${k}:`, v);
+    // }
+
+    const apiKey =
+        typeof req.query.apikey === "string"
+            ? req.query.apikey
+            : "";
+
+    //console.log("API key from query:", apiKey || "(missing)")
+
+
+    // console.log("X-API-Password header:", apiKey || "(missing)");
+    // console.log("Expected CHATBOT_API_KEY:", CHATBOT_API_KEY ? "(set)" : "(not set)");
+
+    if (apiKey !== CHATBOT_API_KEY) {
+        console.warn("AUTH FAIL: API key mismatch");
+        console.warn("  Received:", apiKey);
+        console.warn("  Expected:", CHATBOT_API_KEY);
+        res.status(403).send("Forbidden");
+        return;
+    }
+
+    //console.log("AUTH OK");
+
+    res.setHeader("Cache-Control", "no-store");
+
+    if (req.method === "GET") {
+        //console.log("Serving registration page (GET)");
+        res.type("text/html").send(registerPage("", apiKey));
+        return;
+    }
+
+    if (req.method !== "POST") {
+        console.warn("Unsupported method:", req.method);
+        res.status(405).send("Method Not Allowed");
+        return;
+    }
+
+    try {
+        //console.log("POST body:", req.body);
+
+        const username = String(req.body?.username || "").trim();
+        const password = String(req.body?.password || "");
+        const bodyApiKey = String(req.body?.apiKey || "").trim();
+
+        // console.log("Parsed fields:");
+        // console.log("  username:", username || "(empty)");
+        // console.log("  password length:", password.length);
+        // console.log("  apiKey (hidden field):", bodyApiKey || "(empty)");
+
+        if (!username || !password) {
+            console.warn("VALIDATION FAIL: Missing username or password");
+            res.type("text/html").send(registerPage("Missing fields", apiKey));
+            return;
+        }
+
+        //console.log("Hashing password...");
+        const hash = await argon2.hash(password, {
+            type: argon2.argon2id,
+            memoryCost: 64 * 1024,
+            timeCost: 3,
+            parallelism: 1,
+            hashLength: 64
+        });
+
+        //console.log("Password hashed");
+
+        //console.log("Updating users file:", chatbot_PATH);
+
+        await updateUsersFile(doc => {
+            if (!Array.isArray(doc.users)) {
+                //console.log("Users array missing, creating new one");
+                doc.users = [];
+            }
+
+            if (doc.users.find((u: any) => u.username === username)) {
+                console.warn("USER EXISTS:", username);
+                throw new Error("User already exists");
+            }
+
+            //console.log("Adding user:", username);
+            doc.users.push({ username, hash });
+        });
+
+        //console.log("USER CREATED SUCCESSFULLY:", username);
+
+        //console.log("Registration complete, redirecting to chat")
+
+        res.redirect(302, "https://chat.kittycrypto.gg");
+
+    } catch (err) {
+        console.error("REGISTER ERROR:", err);
+        console.error("Stack:", (err as any)?.stack);
+        res.type("text/html").send(
+            registerPage("Registration failed", apiKey)
+        );
+    } finally {
+        //console.log("=== /chatbot/register END ===");
+    }
+});
+
+server.app.post("/chatbot/authenticate", async (req: Request, res: Response) => {
+    const raw = req.headers["x-api-password"]
+    const apiKey = Array.isArray(raw) ? raw[0] : raw
+
+    if (apiKey !== CHATBOT_API_KEY) {
+        res.status(403).json({ ok: false })
+        return
+    }
+
+    try {
+        const { username, password } = req.body || {}
+
+        if (typeof username !== "string" || typeof password !== "string") {
+            res.status(400).json({ ok: false })
+            return
+        }
+
+        const raw = await fs.promises.readFile(chatbot_PATH, "utf8")
+        const parsed = JSON.parse(raw)
+
+        if (!Array.isArray(parsed.users)) {
+            throw new Error("Invalid users file")
+        }
+
+        const user = parsed.users.find((u: any) => u.username === username)
+
+        if (!user || typeof user.hash !== "string") {
+            res.json({ ok: false })
+            return
+        }
+
+        const ok = await argon2.verify(user.hash, password)
+
+        if (ok) {
+            res.json({ ok: true, username })
+            return
+        }
+
+        res.json({ ok: false })
+    } catch (err) {
+        console.error("❌ /chatbot/authenticate failed:", err)
+        res.status(500).json({ ok: false })
+    }
+})
 
 const renderer = new Renderer(server);
 
