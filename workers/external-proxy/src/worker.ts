@@ -1,4 +1,4 @@
-const KITTYSITE_ORIGIN = "https://kittycrypto.gg";
+const KITTYSITE_ORIGIN = "https://kittycrypto.gg"; 
 
 function isKittyOrigin(url: URL): boolean {
     return url.origin === KITTYSITE_ORIGIN;
