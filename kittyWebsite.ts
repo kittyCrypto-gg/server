@@ -87,16 +87,6 @@ class KittyWebsite {
     return false;
   }
 
-  private static isBareModuleSpecifier(spec: string): boolean {
-    const s = spec.trim();
-    if (!s) return true;
-    if (s.startsWith("./")) return false;
-    if (s.startsWith("../")) return false;
-    if (s.startsWith("/")) return false;
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(s)) return false; // scheme: https:, data:, etc
-    return true;
-  }
-
   private static rewriteNavUrl(raw: string, ctx: RewriteContext): string {
     if (KittyWebsite.isSkippableUrl(raw)) return raw;
 
@@ -193,7 +183,6 @@ class KittyWebsite {
       `$1${ctx.kittyOrigin}/`
     );
 
-    // Drop all scripts from the rendered snapshot, we re-inject from original HTML in correct order
     out = out.replace(/<script\b[\s\S]*?<\/script\s*>/gi, "");
 
     return out;
@@ -203,29 +192,6 @@ class KittyWebsite {
     const re = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
     const match = html.match(re);
     return match ? match[1] : "";
-  }
-
-  private static normaliseKittyScriptAbs(abs: string, ctx: RewriteContext): string {
-    let u: URL;
-    try {
-      u = new URL(abs);
-    } catch {
-      return abs;
-    }
-
-    if (u.origin !== ctx.kittyOrigin) return abs;
-    if (u.pathname.startsWith("/scripts/")) return u.toString();
-
-    const looksLikeJs =
-      u.pathname.endsWith(".js") ||
-      u.pathname.endsWith(".mjs") ||
-      u.pathname.endsWith(".cjs");
-
-    if (!looksLikeJs) return u.toString();
-
-    const file = u.pathname.startsWith("/") ? u.pathname.slice(1) : u.pathname;
-    u.pathname = `/scripts/${file}`;
-    return u.toString();
   }
 
   private static parseScriptsFromSection(sectionHtml: string, placement: "head" | "body", ctx: RewriteContext): ScriptItem[] {
@@ -240,13 +206,13 @@ class KittyWebsite {
       const typeMatch = rawAttrs.match(/\btype=(["'])([^"']+)\1/i);
 
       const isModule = (typeMatch?.[2] ?? "").trim().toLowerCase() === "module";
+
       const srcRaw = srcMatch?.[2] ?? null;
 
       const srcAbs = (() => {
         if (!srcRaw) return null;
         try {
-          const abs = new URL(srcRaw, ctx.pageUrl).href;
-          return KittyWebsite.normaliseKittyScriptAbs(abs, ctx);
+          return new URL(srcRaw, ctx.pageUrl).href;
         } catch {
           return null;
         }
@@ -279,6 +245,10 @@ class KittyWebsite {
     return items;
   }
 
+  private static externalise(upstreamAbs: string, ctx: RewriteContext): string {
+    return `${ctx.kittyOrigin}/external?src=${encodeURIComponent(upstreamAbs)}`;
+  }
+
   private static escapeInlineScript(code: string): string {
     return code.replace(/<\/script/gi, "<\\/script");
   }
@@ -300,6 +270,7 @@ class KittyWebsite {
 
     const parsed = parse(code);
     const imports = parsed[0];
+
     if (imports.length === 0) return code;
 
     let out = "";
@@ -316,7 +287,6 @@ class KittyWebsite {
 
       const next = (() => {
         if (KittyWebsite.isSkippableUrl(spec)) return spec;
-        if (KittyWebsite.isBareModuleSpecifier(spec)) return spec;
 
         let resolved: URL;
         try {
@@ -325,9 +295,10 @@ class KittyWebsite {
           return spec;
         }
 
-        if (resolved.origin !== ctx.kittyOrigin) return spec;
+        const isKitty = resolved.origin === ctx.kittyOrigin;
+        if (!isKitty) return spec;
 
-        return KittyWebsite.normaliseKittyScriptAbs(resolved.href, ctx);
+        return KittyWebsite.externalise(resolved.href, ctx);
       })();
 
       out += next;
@@ -338,48 +309,43 @@ class KittyWebsite {
     return out;
   }
 
-  private static async renderScriptTag(item: ScriptItem, ctx: RewriteContext): Promise<string> {
-    // Inline scripts from HTML stay inline (no changes)
+  private static async inlineScript(item: ScriptItem, ctx: RewriteContext): Promise<string> {
     if (item.srcAbs === null) {
       const code = item.inlineCode ?? "";
       const safe = KittyWebsite.escapeInlineScript(code);
       return `<script${item.attrsSansSrc}>${safe}</script>`;
     }
 
-    // Third-party scripts: keep as src so browser loads them normally
-    if (!item.isKittyScript) {
+    const isKitty = item.isKittyScript;
+    if (!isKitty) {
       const srcAbs = item.srcAbs;
       return `<script src="${srcAbs}"${item.attrsSansSrc}></script>`;
     }
 
-    // Kitty scripts:
-    // - module scripts get fetched, imports rewritten to absolute, then injected inline
-    // - non-module scripts stay external so defer/async keep working
     const moduleUrlAbs = item.srcAbs;
+    const viaWorker = KittyWebsite.externalise(moduleUrlAbs, ctx);
 
-    if (!item.isModule) {
-      return `<script src="${moduleUrlAbs}"${item.attrsSansSrc}></script>`;
-    }
-
-    const res = await fetch(moduleUrlAbs, {
+    const res = await fetch(viaWorker, {
       headers: { Accept: "application/javascript,*/*;q=0.1" }
     });
 
     if (!res.ok) {
-      return `<script type="module" src="${moduleUrlAbs}"${item.attrsSansSrc}></script>`;
+      return `<script src="${moduleUrlAbs}"${item.attrsSansSrc}></script>`;
     }
 
     let code = await res.text();
 
-    const metaPatched = KittyWebsite.rewriteImportMetaUrl(code, moduleUrlAbs);
-    const importRewritten = await KittyWebsite.rewriteModuleImports(metaPatched.patched, moduleUrlAbs, ctx);
-    code = metaPatched.prologue + importRewritten;
+    if (item.isModule) {
+      const metaPatched = KittyWebsite.rewriteImportMetaUrl(code, moduleUrlAbs);
+      const importRewritten = await KittyWebsite.rewriteModuleImports(metaPatched.patched, moduleUrlAbs, ctx);
+      code = metaPatched.prologue + importRewritten;
+    }
 
     const safe = KittyWebsite.escapeInlineScript(code);
-    return `<script type="module"${item.attrsSansSrc}>${safe}</script>`;
+    return `<script${item.attrsSansSrc}>${safe}</script>`;
   }
 
-  private static async buildScriptBlocks(originalHtml: string, ctx: RewriteContext): Promise<{ head: string; body: string }> {
+  private static async buildInlinedScripts(originalHtml: string, ctx: RewriteContext): Promise<{ head: string; body: string }> {
     const head = KittyWebsite.extractSection(originalHtml, "head");
     const body = KittyWebsite.extractSection(originalHtml, "body");
 
@@ -388,12 +354,12 @@ class KittyWebsite {
 
     const headTags: string[] = [];
     for (const item of headItems) {
-      headTags.push(await KittyWebsite.renderScriptTag(item, ctx));
+      headTags.push(await KittyWebsite.inlineScript(item, ctx));
     }
 
     const bodyTags: string[] = [];
     for (const item of bodyItems) {
-      bodyTags.push(await KittyWebsite.renderScriptTag(item, ctx));
+      bodyTags.push(await KittyWebsite.inlineScript(item, ctx));
     }
 
     return {
@@ -463,7 +429,7 @@ class KittyWebsite {
 
       const rewritten = KittyWebsite.rewriteHtml(renderedSnapshot, ctx);
 
-      const scripts = await KittyWebsite.buildScriptBlocks(originalHtml, ctx);
+      const scripts = await KittyWebsite.buildInlinedScripts(originalHtml, ctx);
       const finalHtml = KittyWebsite.injectScripts(rewritten, scripts.head, scripts.body);
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");

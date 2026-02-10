@@ -298,7 +298,7 @@ const requestHandler = new KittyRequest(server, "null", TokenStore, (_data): _da
 
 // Generate a secure session token
 function generateSessionToken(): string {
-    return crypto.randomBytes(32).toString("hex");
+    return crypto.randomBytes(64).toString("hex");
 }
 
 // Endpoint to request a session token
@@ -347,7 +347,16 @@ server.app.post("/session-token/reregister", async (req: Request, res: Response)
 
 // Helper function to extract and normalise IP
 function getClientIp(req: Request): string {
-    let ip = req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "";
+    const cf = req.headers["cf-connecting-ip"];
+    if (typeof cf === "string" && cf.trim()) return cf.trim();
+
+    const xff = req.headers["x-forwarded-for"];
+    const raw = Array.isArray(xff) ? xff[0] : xff;
+
+    let ip = typeof raw === "string" && raw.trim()
+        ? raw.split(",")[0]!.trim()
+        : (req.socket.remoteAddress || "");
+
     if (ip.startsWith("::ffff:")) ip = ip.substring(7);
     return ip;
 }
