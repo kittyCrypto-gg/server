@@ -14,6 +14,8 @@ import fetch from "node-fetch"
 import { tokenStore } from "./tokenStore";
 import argon2 from "argon2"
 import express from "express"
+/* @ts-ignore */
+import "dotenv/config"
 
 
 type GithubContentItem = {

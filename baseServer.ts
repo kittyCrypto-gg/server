@@ -5,6 +5,8 @@ import bodyParser from "body-parser";
 import net from "net";
 import cors from "cors";
 import process from "process";
+/* @ts-ignore */
+import "dotenv/config"
 
 type methods = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'OPTIONS';
 

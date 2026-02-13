@@ -305,14 +305,3 @@ export class autoBlogger {
     return filePath;
   }
 }
-
-// Example usage:
-
-// import { OpenAI } from "openai";
-// const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-// import strings from './strings.json'; // or require('./strings.json')
-
-// const blogger = new CommitAutoBlogger('KittyCrypto-gg', 'kittyServer', openai, strings);
-// blogger.summariseLatestToBlogPost("Kitty").then((outPath) => {
-//   console.log('Blog post saved:', outPath);
-// });

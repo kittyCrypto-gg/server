@@ -1,6 +1,8 @@
 import fetch from 'node-fetch';
 import { writeFile, mkdir, access, constants, readdir, readFile } from 'fs/promises';
 import path from 'path';
+/* @ts-ignore */
+import "dotenv/config"
 
 interface GitHubContentFile {
   sha: string;

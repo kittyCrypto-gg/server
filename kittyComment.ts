@@ -4,6 +4,8 @@ import KittyRequest from "./kittyRequest";
 import { tokenStore } from "./tokenStore";
 import { OpenAI } from "openai";
 import fs from "fs";
+/* @ts-ignore */
+import "dotenv/config"
 
 const apiKey = process.env.OPENAI_KEY || "";
 const openai = new OpenAI({ apiKey });

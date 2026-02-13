@@ -2,6 +2,8 @@ import { GirhubTracker } from "./githubTracker";
 import { autoBlogger, ModeratorStrings } from "./autoBlogger";
 import { OpenAI } from "openai";
 import { readFileSync } from "fs";
+/* @ts-ignore */
+import "dotenv/config"
 
 const apiKey = process.env.OPENAI_KEY || "";
 const openai = new OpenAI({ apiKey });
@@ -28,7 +30,7 @@ export class GithubAutoScheduler {
     this.repos = opts.repos;
     this.blogUser = opts.blogUser ?? "Kitty";
     this.branch = opts.branch ?? "main";
-    this.sinceDays = opts.sinceDays ?? 7;
+    this.sinceDays = opts.sinceDays ?? 30;
     this.strings = JSON.parse(readFileSync("./strings.json", "utf-8"));
     this.scheduleNext();
   }

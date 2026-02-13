@@ -5,6 +5,8 @@ import { OpenAI } from "openai";
 import Server from "./baseServer";
 import KittyRequest from "./kittyRequest";
 import { tokenStore } from "./tokenStore";
+/* @ts-ignore */
+import "dotenv/config"
 
 const CHAT_KEY_RAW = process.env.CHAT_KEY || "";
 const CHAT_KEY_BUFFER = Buffer.from(CHAT_KEY_RAW, "base64");

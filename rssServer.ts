@@ -9,6 +9,8 @@ import nlp from 'compromise';
 import dates from 'compromise-dates';
 import { aiParser } from "./aiParser";
 import Parser from "rss-parser";
+/* @ts-ignore */
+import "dotenv/config"
 
 const HOST = process.env.HOST;
 
