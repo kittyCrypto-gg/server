@@ -269,7 +269,7 @@ export class autoBlogger {
           );
           for (const subChunk of subChunks) {
             const response = await this.openai.chat.completions.create({
-              model: "gpt-4.o-mini",
+              model: "gpt-4o-mini",
               messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPromptBase + `\n${subChunk}` }
