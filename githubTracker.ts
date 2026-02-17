@@ -683,13 +683,21 @@ export class GirhubTracker {
 
     for (const repo of this.repos) {
       console.log(`[GithubTracker][${this.owner}/${repo}] Rebuild starting (branch=${branch})`);
+      console.log(`[GithubTracker][${this.owner}/${repo}] Step 1/3: Fetching full commit list from GitHub API...`);
 
       const itemsNewestFirst = await this.fetchAllCommitItems(repo, branch);
+
+      console.log(
+        `[GithubTracker][${this.owner}/${repo}] Step 1/3: Received ${itemsNewestFirst.length} commit(s).`
+      );
+
       if (!itemsNewestFirst.length) {
-        console.log(`[GithubTracker][${this.owner}/${repo}] No commits found.`);
+        console.log(`[GithubTracker][${this.owner}/${repo}] No commits found. Nothing to rebuild.`);
         results[repo] = [];
         continue;
       }
+
+      console.log(`[GithubTracker][${this.owner}/${repo}] Step 2/3: Reversing list so we replay from oldest to newest...`);
 
       const items = [...itemsNewestFirst].reverse(); // oldest to newest
       const histories: RepoHistory[] = [];
@@ -719,12 +727,29 @@ export class GirhubTracker {
           commits: pending
         };
 
+        console.log(
+          `[GithubTracker][${this.owner}/${repo}] Flush: writing ${pending.length} commit(s) to ${fileName}...`
+        );
+
         await writeFile(filePath, JSON.stringify(history, null, 2), 'utf-8');
         histories.push(history);
 
-        console.log(`[GithubTracker][${this.owner}/${repo}] Rebuild wrote ${pending.length} commits to ${fileName}`);
+        console.log(
+          `[GithubTracker][${this.owner}/${repo}] Flush: wrote ${pending.length} commit(s) to ${fileName}`
+        );
 
         pending = [];
+      };
+
+      console.log(
+        `[GithubTracker][${this.owner}/${repo}] Step 3/3: Replaying ${items.length} commit(s) with versioning...`
+      );
+
+      const progressEvery = Math.max(1, Math.floor(items.length / 200)); // about 0.5% updates
+      const logMessagePreview = (msg: string): string => {
+        const oneLine = msg.replace(/\s+/g, ' ').trim();
+        if (oneLine.length <= 120) return oneLine;
+        return oneLine.slice(0, 117) + '...';
       };
 
       for (let i = 0; i < items.length; i += 1) {
@@ -736,20 +761,91 @@ export class GirhubTracker {
         const message = commitObj.commit.message || '';
         const htmlUrl = commitObj.html_url || '';
 
-        const diff = await this.fetchDiff(repo, sha);
+        const idx = i + 1;
+        const pct = ((idx / items.length) * 100).toFixed(1);
 
+        if (i === 0) {
+          console.log(
+            `[GithubTracker][${this.owner}/${repo}] First commit: idx=${idx}/${items.length} (${pct}%) sha=${sha}`
+          );
+        } else if ((i % progressEvery) === 0) {
+          console.log(
+            `[GithubTracker][${this.owner}/${repo}] Progress: idx=${idx}/${items.length} (${pct}%) currentVersion=${GirhubTracker.formatDecimalVersion(current)}`
+          );
+        }
+
+        console.log(
+          `[GithubTracker][${this.owner}/${repo}] Checking commit ${idx}/${items.length} (${pct}%) sha=${sha} ` +
+          `date=${date || '(no-date)'} author=${author || '(no-author)'} msg="${logMessagePreview(message)}"`
+        );
+
+        // 1) Fetch diff (can be slow, so log before/after)
+        console.log(`[GithubTracker][${this.owner}/${repo}]   - Fetching diff for ${sha}...`);
+        const diff = await this.fetchDiff(repo, sha);
+        console.log(`[GithubTracker][${this.owner}/${repo}]   - Diff fetched (${diff.length} chars).`);
+
+        // 2) Read README at this commit to infer major (historical)
+        console.log(`[GithubTracker][${this.owner}/${repo}]   - Reading README.md at ${sha} to detect major...`);
         const commitMajor = await this.tryReadmeMajorAtSha(repo, sha, lastSeenMajor);
-        if (commitMajor > 0) lastSeenMajor = commitMajor;
+
+        if (commitMajor > 0 && commitMajor !== lastSeenMajor) {
+          console.log(
+            `[GithubTracker][${this.owner}/${repo}]   - Major changed via README: ${lastSeenMajor} -> ${commitMajor}`
+          );
+          lastSeenMajor = commitMajor;
+        } else {
+          console.log(
+            `[GithubTracker][${this.owner}/${repo}]   - Major detected: ${commitMajor} (lastSeenMajor=${lastSeenMajor})`
+          );
+        }
+
+        // 3) Decide tier and bump
+        const before = GirhubTracker.formatDecimalVersion(current);
 
         const setVer = GirhubTracker.extractSetVersion(message);
         if (setVer) {
+          console.log(
+            `[GithubTracker][${this.owner}/${repo}]   - Found !setver override: ${setVer} (was ${before})`
+          );
           current = GirhubTracker.parseDecimalVersion(setVer);
+          const after = GirhubTracker.formatDecimalVersion(current);
+
+          console.log(
+            `[GithubTracker][${this.owner}/${repo}]   - Version set to ${after}`
+          );
         } else {
           const taggedTier = GirhubTracker.decideTierFromMessage(message);
+
+          if (taggedTier) {
+            console.log(
+              `[GithubTracker][${this.owner}/${repo}]   - Tier decided from tag: ${taggedTier}`
+            );
+          } else {
+            console.log(
+              `[GithubTracker][${this.owner}/${repo}]   - No tier tag found. Asking LLM to classify...`
+            );
+          }
+
           const tier = taggedTier ?? await this.decideTierWithLlm(message, diff);
 
-          const next = GirhubTracker.bumpDecimalVersion(current, tier, commitMajor > 0 ? commitMajor : null);
+          if (!taggedTier) {
+            console.log(
+              `[GithubTracker][${this.owner}/${repo}]   - LLM tier: ${tier}`
+            );
+          }
+
+          const next = GirhubTracker.bumpDecimalVersion(
+            current,
+            tier,
+            commitMajor > 0 ? commitMajor : null
+          );
+
           current = next;
+          const after = GirhubTracker.formatDecimalVersion(current);
+
+          console.log(
+            `[GithubTracker][${this.owner}/${repo}]   - Version bump: ${before} -> ${after} (tier=${tier})`
+          );
         }
 
         const version = GirhubTracker.formatDecimalVersion(current);
@@ -766,12 +862,18 @@ export class GirhubTracker {
 
         if (pending.length >= commitsPerFile) {
           const stampIso = pending[pending.length - 1]?.date || new Date().toISOString();
+          console.log(
+            `[GithubTracker][${this.owner}/${repo}] Chunk reached ${commitsPerFile} commit(s). Flushing to disk...`
+          );
           await flush(stampIso);
         }
       }
 
       if (pending.length) {
         const stampIso = pending[pending.length - 1]?.date || new Date().toISOString();
+        console.log(
+          `[GithubTracker][${this.owner}/${repo}] Final flush (${pending.length} remaining commit(s))...`
+        );
         await flush(stampIso);
       }
 
@@ -779,7 +881,7 @@ export class GirhubTracker {
 
       console.log(
         `[GithubTracker][${this.owner}/${repo}] Rebuild complete. ` +
-        `files=${histories.length} commits=${items.length}`
+        `files=${histories.length} commits=${items.length} finalVersion=${GirhubTracker.formatDecimalVersion(current)}`
       );
     }
 
