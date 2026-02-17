@@ -874,4 +874,4 @@ console.log(renderer.readyMessage());
 
 console.log(`🚀 Kitty Server is running on https://${HOST}:${PORT}`);
 
-//blogger.runOnceNow();
+blogger.runOnceNow();

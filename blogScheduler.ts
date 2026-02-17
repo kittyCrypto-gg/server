@@ -53,7 +53,8 @@ export class GithubAutoScheduler {
     for (const repo of this.repos) {
       try {
         const tracker = new GirhubTracker(this.owner, [repo]);
-        await tracker.getCommits(this.branch, this.sinceDays);
+        //await tracker.getCommits(this.branch, this.sinceDays);
+        await tracker.rebuildAllHistory(this.branch);
         const blogger = new autoBlogger(this.owner, repo, this.openai, this.strings);
 
         const posts = await blogger.summariseLatest(this.blogUser, true);
