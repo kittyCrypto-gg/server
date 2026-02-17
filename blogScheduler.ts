@@ -55,7 +55,15 @@ export class GithubAutoScheduler {
         const tracker = new GirhubTracker(this.owner, [repo]);
         await tracker.getCommits(this.branch, this.sinceDays);
         const blogger = new autoBlogger(this.owner, repo, this.openai, this.strings);
-        await blogger.summariseLatestToBlogPost(this.blogUser);
+
+        const posts = await blogger.summariseLatest(this.blogUser, true);
+
+        // const posts = await blogger.summariseAll(this.blogUser, false);
+
+        for (const p of posts) {
+          console.log(`[autoBlogger] Wrote: ${p}`);
+        }
+
         console.log(`✅ Auto-tracked and blogged for ${repo} at ${new Date().toISOString()}`);
       } catch (err) {
         console.error(`❌ Error running tracking or blogging for ${repo}:`, err);

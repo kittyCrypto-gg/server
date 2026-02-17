@@ -21,6 +21,16 @@ export interface CommitEntry {
   version?: string;
 }
 
+type BritishSpellcheckChunkResponse = {
+  patched: string;
+};
+
+type LineChange = {
+  line: number; // 1-based
+  before: string;
+  after: string;
+};
+
 export interface CommitLog {
   repo: string;
   createdAt: string & { readonly __iso8601: unique symbol };
@@ -50,6 +60,85 @@ export class autoBlogger {
     this.strings = strings;
     this.commitsDir = path.resolve(process.cwd(), commitsDir);
     this.postsDir = path.resolve(process.cwd(), postsDir);
+  }
+
+  private static diffLines(before: string, after: string): LineChange[] {
+    const a = before.split('\n');
+    const b = after.split('\n');
+
+    if (a.length !== b.length) {
+      return [{
+        line: 0,
+        before: `[line-count=${a.length}]`,
+        after: `[line-count=${b.length}]`
+      }];
+    }
+
+    const changes: LineChange[] = [];
+
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i] === b[i]) continue;
+      changes.push({ line: i + 1, before: a[i], after: b[i] });
+    }
+
+    return changes;
+  }
+
+  private splitMarkdown(
+    markdown: string,
+    maxCharsPerChunk = 6000
+  ): Array<{ startLine: number; text: string }> {
+    const lines = markdown.split('\n');
+
+    const chunks: Array<{ startLine: number; text: string }> = [];
+    let buf: string[] = [];
+    let bufChars = 0;
+    let startLine = 1;
+
+    let inFence = false;
+    let fenceToken: '```' | '~~~' | null = null;
+
+    const flush = () => {
+      if (!buf.length) return;
+      chunks.push({ startLine, text: buf.join('\n') });
+      buf = [];
+      bufChars = 0;
+    };
+
+    const isFenceLine = (line: string): '```' | '~~~' | null => {
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith('```')) return '```';
+      if (trimmed.startsWith('~~~')) return '~~~';
+      return null;
+    };
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const fence = isFenceLine(line);
+
+      if (!inFence && fence) {
+        inFence = true;
+        fenceToken = fence;
+      } else if (inFence && fence && fenceToken === fence) {
+        inFence = false;
+        fenceToken = null;
+      }
+
+      const lineChars = line.length + 1; // + newline
+
+      const wouldOverflow = (bufChars + lineChars) > maxCharsPerChunk;
+
+      if (wouldOverflow && !inFence) {
+        flush();
+        startLine = i + 1;
+      }
+
+      buf.push(line);
+      bufChars += lineChars;
+    }
+
+    flush();
+    return chunks;
   }
 
   private async ensureDir(dir: string): Promise<void> {
@@ -96,7 +185,7 @@ export class autoBlogger {
     ].join('\n');
   }
 
-  private normaliseCommitLogForLlm(json: CommitLog, maxDiffCharsPerCommit: number): CommitLog {
+  private normalise(json: CommitLog, maxDiffCharsPerCommit: number): CommitLog {
     return {
       repo: json.repo,
       createdAt: json.createdAt,
@@ -108,7 +197,7 @@ export class autoBlogger {
     };
   }
 
-  private splitJsonByCommitsRecursive(
+  private splitJson(
     json: CommitLog,
     maxTokens: number,
     systemPromptTokens: number,
@@ -163,7 +252,7 @@ export class autoBlogger {
     return result;
   }
 
-  private static extractTokenCountFromError(err: unknown): number | null {
+  private static extractTknCnt(err: unknown): number | null {
     if (!err || typeof err !== "object") return null;
 
     const errAny = err as {
@@ -203,12 +292,11 @@ export class autoBlogger {
     const { systemPrompt, userPrompt } = this.buildMergePrompts(summaryBatch, user);
 
     const response = await this.openai.chat.completions.create({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
       ],
-      temperature: 0.7,
       max_tokens: 1536
     });
 
@@ -237,7 +325,7 @@ export class autoBlogger {
     return this.mergeSummariesBatchSafely([left, right], user, maxInputTokens);
   }
 
-  private async mergeSummariesToSingle(summaryArray: string[], user = "Kitty"): Promise<string> {
+  private async mergeSumm(summaryArray: string[], user = "Kitty"): Promise<string> {
     const cleaned = summaryArray.map(s => s.trim()).filter(s => s.length > 0);
 
     if (cleaned.length === 0) return "No changes detected.";
@@ -262,16 +350,35 @@ export class autoBlogger {
     return current[0];
   }
 
-  private buildSummarisePrompts(): { systemPrompt: string, userPromptBase: string } {
+  private buildSummary(): { systemPrompt: string, userPromptBase: string } {
+    const examplePost = `
+      ---
+      title: "{AUTHOR} Commit Tracker Blog Post for {PROJECT_NAME}"
+      date: {DATE_YYYY_MM_DD}
+      author: {AUTHOR}
+      summary: "{SUMMARY_OF_CHANGES_IN_ONE_SENTENCE}"
+      slug: "{AUTHOR}-commits-summary-{DATE_YYYY_MM_DD}"
+      tags: [commits, github, "source code", "{OTHER_RELEVANT_TAG_1}", "{OTHER_RELEVANT_TAG_2}"]
+      ---
+
+      - {CHANGE_SUMMARY_1}. [Commit Details]({LINK_TO_GITHUB_COMMIT_1})
+      - {CHANGE_SUMMARY_2}. [Commit Details]({LINK_TO_GITHUB_COMMIT_2})
+    `.trim();
+
     const systemPrompt =
       this.strings.autoBlogger?.role ||
-      "Summarise a JSON commit log as a Markdown blog post for developers. Use a clear, concise British-English style and add suitable front matter.";
+      "Summarise a JSON commit log as a Markdown blog post for developers. Use clear, concise British spelling and add suitable front matter.";
 
     const userPromptBase =
       (this.strings.autoBlogger?.user ??
-        "Write a brief, readable markdown post (with YAML front matter) based on this JSON commit log. " +
-        "Do not include commit SHAs or code details unless essential. Only highlight user- or developer-facing changes.\n\nCommit log JSON:\n");
-
+        `Write a brief, readable Markdown post (with YAML front matter) based on this JSON commit log.` +
+        `\nThere is no upper bound on the number of commits. Include as many bullet points (or grouped bullets) as needed to cover all relevant changes.` +
+        `\nEnsure links to relevant commits that can be clicked and point to GitHub are included (not to the repository, but to the specific commits).` +
+        `\nIf multiple commits are related, group them together in the summary and provide links to the biggest commits, not the smallest ones.` +
+        `\nBritish spelling should be used throughout.` +
+        `\nExample Post (short example only; real output may include many more tags and bullet points):\n${examplePost}` +
+        `\n The Commit Details links should be included for each bullet point, and should link to the specific commit on GitHub that the bullet is summarising. ` +
+        `\nDo not include commit SHAs or code details unless essential. Only highlight user- or developer-facing changes.\n\nCommit log JSON:\n`);
     return { systemPrompt, userPromptBase };
   }
 
@@ -301,101 +408,348 @@ export class autoBlogger {
     };
   }
 
-  public async summariseLatestToBlogPost(user = "Kitty"): Promise<string> {
+  private async spellcheckMd(
+    markdown: string,
+    fileName: string
+  ): Promise<string | null> {
+    const chunks = this.splitMarkdown(markdown, 6000);
+    const patchedChunks: string[] = [];
+
+    for (const chunk of chunks) {
+      const systemPrompt =
+        "You convert American English spelling to British English spelling only. " +
+        "Do not rephrase, rewrite, shorten, or expand. Only adjust spelling variants (e.g., color->colour, organize->organise) when appropriate. " +
+        "Preserve every line break exactly (same number of lines, same ordering). " +
+        "Do not change anything inside fenced code blocks (``` or ~~~), inline code (`like this`), URLs, or the URL target part of Markdown links. " +
+        "Do not change YAML front matter keys; you may adjust British spelling inside YAML string values only. " +
+        "Return ONLY valid JSON in the form {\"patched\":\"...\"} with the patched text.";
+
+      const userPrompt =
+        `File: ${fileName}\n` +
+        `Chunk starts at line ${chunk.startLine}\n\n` +
+        `Markdown chunk:\n` +
+        chunk.text;
+
+      let content = "";
+      try {
+        const resp = await this.openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt }
+          ],
+          max_tokens: 4096
+        });
+
+        content = resp.choices[0].message.content ?? "";
+      } catch (err) {
+        console.warn(
+          `[autoBlogger][spellcheck][${this.repo}] ${fileName} chunk @${chunk.startLine} failed.`,
+          err
+        );
+        return null;
+      }
+
+      let parsed: BritishSpellcheckChunkResponse | null = null;
+
+      try {
+        parsed = JSON.parse(content) as BritishSpellcheckChunkResponse;
+      } catch {
+        console.warn(
+          `[autoBlogger][spellcheck][${this.repo}] ${fileName} chunk @${chunk.startLine} returned non-JSON. Skipping file.`
+        );
+        return null;
+      }
+
+      if (!parsed || typeof parsed.patched !== "string") {
+        console.warn(
+          `[autoBlogger][spellcheck][${this.repo}] ${fileName} chunk @${chunk.startLine} JSON missing "patched". Skipping file.`
+        );
+        return null;
+      }
+
+      const beforeLines = chunk.text.split('\n').length;
+      const afterLines = parsed.patched.split('\n').length;
+
+      if (beforeLines !== afterLines) {
+        console.warn(
+          `[autoBlogger][spellcheck][${this.repo}] ${fileName} chunk @${chunk.startLine} changed line count (${beforeLines} -> ${afterLines}). Skipping file.`
+        );
+        return null;
+      }
+
+      patchedChunks.push(parsed.patched);
+    }
+
+    return patchedChunks.join('\n');
+  }
+
+  private async spellcheck(targetPaths?: string[]): Promise<void> {
     await this.ensureDir(this.postsDir);
 
-    const latest = await this.getLatestJson();
-    if (!latest) throw new Error('No commit history found.');
+    const targets = (targetPaths && targetPaths.length > 0)
+      ? targetPaths
+        .map(p => (path.isAbsolute(p) ? p : path.join(this.postsDir, p)))
+        .sort()
+      : (await readdir(this.postsDir))
+        .filter(f => f.endsWith('.md'))
+        .sort()
+        .map(f => path.join(this.postsDir, f));
 
-    if (latest.json.blogged) return 'Already blogged, skipping.';
+    for (const fullPath of targets) {
+      const fileName = path.basename(fullPath);
 
-    const { systemPrompt, userPromptBase } = this.buildSummarisePrompts();
-
-    const modelContextLimit = 128_000;
-    const responseBufferTokens = 2048;
-    const safetyBufferTokens = 4096;
-
-    const maxDiffCharsPerCommit = 10_000;
-    const maxTokensPerChunk = 24_000;
-
-    const llmLog = this.normaliseCommitLogForLlm(latest.json, maxDiffCharsPerCommit);
-    const jsonText = JSON.stringify(llmLog, null, 2);
-
-    const systemPromptTokens = autoBlogger.estimateTokens(systemPrompt);
-    const userPromptTokens = autoBlogger.estimateTokens(userPromptBase);
-
-    const wholeEstimate =
-      systemPromptTokens +
-      userPromptTokens +
-      autoBlogger.estimateTokens(jsonText) +
-      responseBufferTokens +
-      safetyBufferTokens;
-
-    const summaries: string[] = [];
-
-    const canTrySingle = wholeEstimate < modelContextLimit;
-
-    if (canTrySingle) {
+      let raw = "";
       try {
-        summaries.push(await this.summariseChunk(systemPrompt, userPromptBase, jsonText));
-      } catch (err) {
-        const hint = autoBlogger.extractTokenCountFromError(err as OpenAIAPIErrorShape);
-        console.warn(
-          `[autoBlogger][${this.repo}] Single-pass summarise failed, falling back to chunking.` +
-          (hint ? ` tokens=${hint}` : '')
+        raw = await readFile(fullPath, "utf-8");
+      } catch {
+        console.warn(`[autoBlogger][spellcheck][${this.repo}] Failed to read ${fullPath}`);
+        continue;
+      }
+
+      const patched = await this.spellcheckMd(raw, fileName);
+      if (patched === null) continue;
+      if (patched === raw) continue;
+
+      const changes = autoBlogger.diffLines(raw, patched);
+      const lineCountMismatch = changes.length === 1 && changes[0].line === 0;
+      if (lineCountMismatch) {
+        console.warn(`[autoBlogger][spellcheck][${this.repo}] ${fileName} line count mismatch, refusing to overwrite.`);
+        continue;
+      }
+
+      await writeFile(fullPath, patched, "utf-8");
+
+      console.log(`[autoBlogger][spellcheck][${this.repo}] Updated ${fileName} (${changes.length} line(s) changed).`);
+
+      for (const c of changes) {
+        console.log(
+          `[autoBlogger][spellcheck][${this.repo}] file=${fileName} line=${c.line}\n` +
+          `  - ${c.before}\n` +
+          `  + ${c.after}`
         );
       }
     }
+  }
 
-    const needsChunking = summaries.length === 0;
+  public async summariseLatest(user = "autoKitty", spellCheck: boolean = false): Promise<string[]> {
+    await this.ensureDir(this.postsDir);
 
-    if (needsChunking) {
-      const chunks = this.splitJsonByCommitsRecursive(
-        llmLog,
-        maxTokensPerChunk,
-        systemPromptTokens,
-        userPromptTokens
-      );
+    const outPaths: string[] = [];
 
-      console.log(`[autoBlogger][${this.repo}] Splitting into ${chunks.length} chunk(s).`);
+    try {
+      const latest = await this.getLatestJson();
+      if (!latest) throw new Error('No commit history found.');
 
-      for (let i = 0; i < chunks.length; i += 1) {
-        const chunk = chunks[i];
+      if (latest.json.blogged === true) return [];
 
+      const { systemPrompt, userPromptBase } = this.buildSummary();
+
+      const modelContextLimit = 128_000;
+      const responseBufferTokens = 2048;
+      const safetyBufferTokens = 4096;
+
+      const maxDiffCharsPerCommit = 10_000;
+      const maxTokensPerChunk = 24_000;
+
+      const llmLog = this.normalise(latest.json, maxDiffCharsPerCommit);
+      const jsonText = JSON.stringify(llmLog, null, 2);
+
+      const systemPromptTokens = autoBlogger.estimateTokens(systemPrompt);
+      const userPromptTokens = autoBlogger.estimateTokens(userPromptBase);
+
+      const wholeEstimate =
+        systemPromptTokens +
+        userPromptTokens +
+        autoBlogger.estimateTokens(jsonText) +
+        responseBufferTokens +
+        safetyBufferTokens;
+
+      const summaries: string[] = [];
+      const canTrySingle = wholeEstimate < modelContextLimit;
+
+      if (canTrySingle) {
         try {
-          summaries.push(await this.summariseChunk(systemPrompt, userPromptBase, chunk));
-          continue;
-        } catch (chunkErr) {
-          const hint = autoBlogger.extractTokenCountFromError(chunkErr as OpenAIAPIErrorShape);
+          summaries.push(await this.summariseChunk(systemPrompt, userPromptBase, jsonText));
+        } catch (err) {
+          const hint = autoBlogger.extractTknCnt(err as OpenAIAPIErrorShape);
           console.warn(
-            `[autoBlogger][${this.repo}] Chunk ${i + 1}/${chunks.length} failed.` +
+            `[autoBlogger][${this.repo}] Single-pass summarise failed, falling back to chunking.` +
             (hint ? ` tokens=${hint}` : '')
           );
         }
-
-        const parsed = JSON.parse(chunk) as CommitLog;
-        const skinny = this.toSkinnyLog(parsed);
-        summaries.push(await this.summariseChunk(systemPrompt, userPromptBase, JSON.stringify(skinny, null, 2)));
       }
+
+      if (summaries.length === 0) {
+        const chunks = this.splitJson(
+          llmLog,
+          maxTokensPerChunk,
+          systemPromptTokens,
+          userPromptTokens
+        );
+
+        console.log(`[autoBlogger][${this.repo}] Splitting into ${chunks.length} chunk(s).`);
+
+        for (let i = 0; i < chunks.length; i += 1) {
+          const chunk = chunks[i];
+
+          try {
+            summaries.push(await this.summariseChunk(systemPrompt, userPromptBase, chunk));
+            continue;
+          } catch (chunkErr) {
+            const hint = autoBlogger.extractTknCnt(chunkErr as OpenAIAPIErrorShape);
+            console.warn(
+              `[autoBlogger][${this.repo}] Chunk ${i + 1}/${chunks.length} failed.` +
+              (hint ? ` tokens=${hint}` : '')
+            );
+          }
+
+          const parsed = JSON.parse(chunk) as CommitLog;
+          const skinny = this.toSkinnyLog(parsed);
+          summaries.push(await this.summariseChunk(systemPrompt, userPromptBase, JSON.stringify(skinny, null, 2)));
+        }
+      }
+
+      const merged = await this.mergeSumm(summaries, user);
+
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = (now.getMonth() + 1).toString().padStart(2, '0');
+      const d = now.getDate().toString().padStart(2, '0');
+      const hh = now.getHours().toString().padStart(2, '0');
+      const mm = now.getMinutes().toString().padStart(2, '0');
+
+      const fileName = `autoBlogger-commits-${y}${m}${d}-${hh}:${mm}-${user}-${this.repo}.md`;
+      const filePath = path.join(this.postsDir, fileName);
+
+      await writeFile(filePath, merged, 'utf-8');
+      outPaths.push(filePath);
+
+      latest.json.blogged = true;
+      await writeFile(path.join(this.commitsDir, latest.file), JSON.stringify(latest.json, null, 2), 'utf-8');
+
+      return outPaths;
+    } finally {
+      if (spellCheck && outPaths.length > 0)
+        await this.spellcheck(outPaths);
     }
+  }
 
-    const merged = await this.mergeSummariesToSingle(summaries, user);
+  public async summariseAll(user = "autoKitty", spellCheck: boolean = false): Promise<string[]> {
+    await this.ensureDir(this.postsDir);
 
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = (now.getMonth() + 1).toString().padStart(2, '0');
-    const d = now.getDate().toString().padStart(2, '0');
-    const hh = now.getHours().toString().padStart(2, '0');
-    const mm = now.getMinutes().toString().padStart(2, '0');
+    const outPaths: string[] = [];
 
-    const fileName = `autoBlogger-commits-${y}${m}${d}-${hh}:${mm}-${user}-${this.repo}.md`;
-    const filePath = path.join(this.postsDir, fileName);
+    try {
+      const pattern = new RegExp(`-GithubTracker-${this.owner}-${this.repo}\\.json$`);
+      const files = (await readdir(this.commitsDir))
+        .filter(f => pattern.test(f))
+        .sort();
 
-    await writeFile(filePath, merged, 'utf-8');
+      const stampTracker = (fileName: string): string => {
+        const match = /^(\d{8}-\d{6})-GithubTracker-/.exec(fileName);
+        return match ? match[1] : "unknown";
+      };
 
-    latest.json.blogged = true;
-    await writeFile(path.join(this.commitsDir, latest.file), JSON.stringify(latest.json, null, 2), 'utf-8');
+      for (const file of files) {
+        const fullPath = path.join(this.commitsDir, file);
+        const raw = await readFile(fullPath, "utf-8");
 
-    return filePath;
+        let json: CommitLog;
+        try {
+          json = JSON.parse(raw) as CommitLog;
+        } catch {
+          console.warn(`[autoBlogger][${this.repo}] Skipping invalid JSON file: ${file}`);
+          continue;
+        }
+
+        if (json.blogged === true) continue;
+
+        const { systemPrompt, userPromptBase } = this.buildSummary();
+
+        const modelContextLimit = 128_000;
+        const responseBufferTokens = 2048;
+        const safetyBufferTokens = 4096;
+
+        const maxDiffCharsPerCommit = 10_000;
+        const maxTokensPerChunk = 24_000;
+
+        const llmLog = this.normalise(json, maxDiffCharsPerCommit);
+        const jsonText = JSON.stringify(llmLog, null, 2);
+
+        const systemPromptTokens = autoBlogger.estimateTokens(systemPrompt);
+        const userPromptTokens = autoBlogger.estimateTokens(userPromptBase);
+
+        const wholeEstimate =
+          systemPromptTokens +
+          userPromptTokens +
+          autoBlogger.estimateTokens(jsonText) +
+          responseBufferTokens +
+          safetyBufferTokens;
+
+        const summaries: string[] = [];
+        const canTrySingle = wholeEstimate < modelContextLimit;
+
+        if (canTrySingle) {
+          try {
+            summaries.push(await this.summariseChunk(systemPrompt, userPromptBase, jsonText));
+          } catch (err) {
+            const hint = autoBlogger.extractTknCnt(err as OpenAIAPIErrorShape);
+            console.warn(
+              `[autoBlogger][${this.repo}] Single-pass summarise failed, falling back to chunking.` +
+              (hint ? ` tokens=${hint}` : '')
+            );
+          }
+        }
+
+        if (summaries.length === 0) {
+          const chunks = this.splitJson(
+            llmLog,
+            maxTokensPerChunk,
+            systemPromptTokens,
+            userPromptTokens
+          );
+
+          console.log(`[autoBlogger][${this.repo}] ${file} split into ${chunks.length} chunk(s).`);
+
+          for (let i = 0; i < chunks.length; i += 1) {
+            const chunk = chunks[i];
+
+            try {
+              summaries.push(await this.summariseChunk(systemPrompt, userPromptBase, chunk));
+              continue;
+            } catch (chunkErr) {
+              const hint = autoBlogger.extractTknCnt(chunkErr as OpenAIAPIErrorShape);
+              console.warn(
+                `[autoBlogger][${this.repo}] ${file} chunk ${i + 1}/${chunks.length} failed.` +
+                (hint ? ` tokens=${hint}` : '')
+              );
+            }
+
+            const parsed = JSON.parse(chunk) as CommitLog;
+            const skinny = this.toSkinnyLog(parsed);
+            summaries.push(await this.summariseChunk(systemPrompt, userPromptBase, JSON.stringify(skinny, null, 2)));
+          }
+        }
+
+        const merged = await this.mergeSumm(summaries, user);
+
+        const stamp = stampTracker(file);
+        const fileName = `autoBlogger-commits-${stamp}-${user}-${this.repo}.md`;
+        const postPath = path.join(this.postsDir, fileName);
+
+        await writeFile(postPath, merged, "utf-8");
+
+        json.blogged = true;
+        await writeFile(fullPath, JSON.stringify(json, null, 2), "utf-8");
+
+        outPaths.push(postPath);
+      }
+
+      return outPaths;
+    } finally {
+      if (spellCheck && outPaths.length > 0)
+        await this.spellcheck(outPaths);
+    }
   }
 }
