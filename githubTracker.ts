@@ -18,12 +18,6 @@ type DecimalVersion = {
   digits: [number, number, number, number, number, number]; // decimal places, left-to-right
 };
 
-interface GitHubContentFile {
-  sha: string;
-  content: string;
-  encoding: string;
-}
-
 type RepoIdentifier = string;
 
 type CommitSummary = {
@@ -111,7 +105,7 @@ export class GirhubTracker {
     }
   }
 
-  private getNowStamp(): string {
+  private getNow(): string {
     const now = new Date();
     return this.stampFromDate(now);
   }
@@ -128,13 +122,13 @@ export class GirhubTracker {
 
   private stampFromIso(iso: string): string {
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return this.getNowStamp();
+    if (Number.isNaN(d.getTime())) return this.getNow();
     return this.stampFromDate(d);
   }
 
   private bumpStampByOneSecond(stamp: string): string {
     const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(stamp);
-    if (!m) return this.getNowStamp();
+    if (!m) return this.getNow();
 
     const y = parseInt(m[1], 10);
     const mo = parseInt(m[2], 10) - 1;
@@ -178,7 +172,7 @@ export class GirhubTracker {
     return d;
   }
 
-  private computeSinceIso(fallbackSinceDays: number, lastCommitDate: string | undefined): string {
+  private compSince(fallbackSinceDays: number, lastCommitDate: string | undefined): string {
     const last = this.safeDate(lastCommitDate);
 
     if (!last) {
@@ -189,7 +183,7 @@ export class GirhubTracker {
     return new Date(last.getTime() - bufferMs).toISOString();
   }
 
-  private parseLinkHeader(linkHeader: string | null): Record<string, string> {
+  private parseLink(linkHeader: string | null): Record<string, string> {
     if (!linkHeader) return {};
 
     const links: Record<string, string> = {};
@@ -205,7 +199,7 @@ export class GirhubTracker {
     return links;
   }
 
-  private normaliseCommitItems(raw: unknown): GitHubCommit[] {
+  private normCommItems(raw: unknown): GitHubCommit[] {
     if (!Array.isArray(raw)) return [];
 
     const items: GitHubCommit[] = [];
@@ -241,7 +235,7 @@ export class GirhubTracker {
     return items;
   }
 
-  private async fetchCommitItemsUntil(
+  private async fetchCommItms(
     repo: RepoIdentifier,
     branch: string,
     sinceIso: string,
@@ -267,7 +261,7 @@ export class GirhubTracker {
       }
 
       const raw: unknown = await resp.json();
-      const pageItems = this.normaliseCommitItems(raw);
+      const pageItems = this.normCommItems(raw);
 
       if (!pageItems.length) return all;
 
@@ -284,7 +278,7 @@ export class GirhubTracker {
         all.push(...pageItems);
       }
 
-      const links = this.parseLinkHeader(resp.headers.get('link'));
+      const links = this.parseLink(resp.headers.get('link'));
       const hasNext = typeof links.next === 'string' && links.next.length > 0;
 
       if (!hasNext) return all;
@@ -301,7 +295,7 @@ export class GirhubTracker {
     }
   }
 
-  private async fetchAllCommitItems(
+  private async fetchAll(
     repo: RepoIdentifier,
     branch: string
   ): Promise<GitHubCommit[]> {
@@ -324,13 +318,13 @@ export class GirhubTracker {
       }
 
       const raw: unknown = await resp.json();
-      const pageItems = this.normaliseCommitItems(raw);
+      const pageItems = this.normCommItems(raw);
 
       if (!pageItems.length) return all;
 
       all.push(...pageItems);
 
-      const links = this.parseLinkHeader(resp.headers.get('link'));
+      const links = this.parseLink(resp.headers.get('link'));
       const hasNext = typeof links.next === 'string' && links.next.length > 0;
 
       if (!hasNext) return all;
@@ -355,7 +349,7 @@ export class GirhubTracker {
     return v;
   }
 
-  private static parseDecimalVersion(version: string): DecimalVersion {
+  private static parseVer(version: string): DecimalVersion {
     const trimmed = version.trim();
     const match = /^(\d+)(?:\.([0-9]+))?$/.exec(trimmed);
 
@@ -383,7 +377,7 @@ export class GirhubTracker {
     };
   }
 
-  private static formatDecimalVersion(v: DecimalVersion): string {
+  private static formatVer(v: DecimalVersion): string {
     const digits = v.digits;
 
     let lastNonZero = -1;
@@ -401,20 +395,20 @@ export class GirhubTracker {
     return `${v.major}.${frac}`;
   }
 
-  private static bumpDecimalVersion(base: DecimalVersion, tier: BumpTier, commitReadmeMajor: number | null): DecimalVersion {
-    if (tier === "skip") return base;
-
-    const needsMajorSync = (commitReadmeMajor !== null && commitReadmeMajor > base.major);
-    const baseSynced: DecimalVersion = needsMajorSync
-      ? { major: commitReadmeMajor as number, digits: [0, 0, 0, 0, 0, 0] }
+  private static bumpVer(base: DecimalVersion, tier: BumpTier, commitMd: number | null): DecimalVersion {
+    const majSync = (commitMd !== null && commitMd > base.major);
+    const baseSync: DecimalVersion = majSync
+      ? { major: commitMd as number, digits: [0, 0, 0, 0, 0, 0] }
       : base;
 
+    if (tier === "skip") return baseSync;
+
     if (tier === "major") {
-      if (needsMajorSync) return baseSynced;
+      if (majSync) return baseSync;
       return { major: base.major + 1, digits: [0, 0, 0, 0, 0, 0] };
     }
 
-    const next: DecimalVersion = { major: baseSynced.major, digits: [...baseSynced.digits] as DecimalVersion["digits"] };
+    const next: DecimalVersion = { major: baseSync.major, digits: [...baseSync.digits] as DecimalVersion["digits"] };
 
     const tierToIndex: Record<Exclude<BumpTier, "skip" | "major">, number> = {
       feat: 0,
@@ -447,12 +441,12 @@ export class GirhubTracker {
     return next;
   }
 
-  private static extractSetVersion(message: string): string | null {
+  private static extrVer(message: string): string | null {
     const m = /!setver\s*(?:=|:)\s*(\d+(?:\.\d+)?)/i.exec(message);
     return m ? m[1] : null;
   }
 
-  private static decideTierFromMessage(message: string): BumpTier | null {
+  private static tierFromMsg(message: string): BumpTier | null {
     const lower = message.toLowerCase();
 
     if (lower.includes('!skip') || lower.includes('!skipver') || lower.includes('!noversion')) return "skip";
@@ -475,7 +469,7 @@ export class GirhubTracker {
     return null;
   }
 
-  private static estimateTokens(str: string): number {
+  private static estTokens(str: string): number {
     const bytes = Buffer.byteLength(str, 'utf8');
     return Math.ceil(bytes / 2);
   }
@@ -498,7 +492,7 @@ export class GirhubTracker {
     ].join('\n');
   }
 
-  private static parseLlmTierJson(raw: string): LlmTierJson | null {
+  private static parseTJson(raw: string): LlmTierJson | null {
     try {
       const obj = JSON.parse(raw) as Record<string, unknown>;
       const tier = obj.tier;
@@ -520,7 +514,7 @@ export class GirhubTracker {
     }
   }
 
-  private async decideTierWithLlm(message: string, diff: string): Promise<Exclude<BumpTier, "skip">> {
+  private async genTier(message: string, diff: string): Promise<Exclude<BumpTier, "skip">> {
     if (!this.openai) return "tiny";
 
     const systemPrompt =
@@ -542,7 +536,7 @@ export class GirhubTracker {
       "\n\nDiff:\n" +
       trimmedDiff;
 
-    const estimated = GirhubTracker.estimateTokens(systemPrompt) + GirhubTracker.estimateTokens(userPrompt) + 1024;
+    const estimated = GirhubTracker.estTokens(systemPrompt) + GirhubTracker.estTokens(userPrompt) + 1024;
     if (estimated > 40_000) return "tiny";
 
     try {
@@ -557,7 +551,7 @@ export class GirhubTracker {
       });
 
       const content = resp.choices[0]?.message.content ?? "";
-      const parsed = GirhubTracker.parseLlmTierJson(content);
+      const parsed = GirhubTracker.parseTJson(content);
 
       return parsed?.tier ?? "tiny";
     } catch (err) {
@@ -587,18 +581,18 @@ export class GirhubTracker {
         baseVersionStr = lastCommit.version;
       }
 
-      const sinceIso = this.computeSinceIso(sinceDays, lastCommitDate);
-      const versionInfo = await this.getReadmeVersion(repo, branch);
+      const sinceIso = this.compSince(sinceDays, lastCommitDate);
+      const versionInfo = await this.getMdVer(repo, branch);
 
       const baseFromReadme = `${versionInfo.major}.00`;
-      let current = GirhubTracker.parseDecimalVersion(baseVersionStr ?? baseFromReadme);
+      let current = GirhubTracker.parseVer(baseVersionStr ?? baseFromReadme);
 
       console.log(
         `[GithubTracker][${this.owner}/${repo}] ` +
         `lastFile=${lastHist?.file ?? '(none)'} ` +
         `lastSha=${lastSha || '(none)'} ` +
         `since=${sinceIso} ` +
-        `base=${GirhubTracker.formatDecimalVersion(current)}`
+        `base=${GirhubTracker.formatVer(current)}`
       );
 
       let commits = await this.fetchCommits(repo, branch, sinceIso, versionInfo, lastSha);
@@ -625,28 +619,28 @@ export class GirhubTracker {
       const outCommits: CommitSummary[] = [];
 
       for (const c of newCommits) {
-        const commitReadmeMajor = GirhubTracker.parseDecimalVersion(c.version).major;
+        const commitReadmeMajor = GirhubTracker.parseVer(c.version).major;
         const forcedMajor = commitReadmeMajor > 0 ? commitReadmeMajor : null;
 
-        const setVer = GirhubTracker.extractSetVersion(c.message);
+        const setVer = GirhubTracker.extrVer(c.message);
         if (setVer) {
-          current = GirhubTracker.parseDecimalVersion(setVer);
-          c.version = GirhubTracker.formatDecimalVersion(current);
+          current = GirhubTracker.parseVer(setVer);
+          c.version = GirhubTracker.formatVer(current);
           outCommits.push(c);
           continue;
         }
 
-        const taggedTier = GirhubTracker.decideTierFromMessage(c.message);
-        const tier = taggedTier ?? await this.decideTierWithLlm(c.message, c.diff);
+        const taggedTier = GirhubTracker.tierFromMsg(c.message);
+        const tier = taggedTier ?? await this.genTier(c.message, c.diff);
 
-        const next = GirhubTracker.bumpDecimalVersion(current, tier, forcedMajor);
+        const next = GirhubTracker.bumpVer(current, tier, forcedMajor);
         current = next;
 
-        c.version = GirhubTracker.formatDecimalVersion(current);
+        c.version = GirhubTracker.formatVer(current);
         outCommits.push(c);
       }
 
-      const nowStamp = this.getNowStamp();
+      const nowStamp = this.getNow();
       const fileName = `${nowStamp}-GithubTracker-${this.owner}-${repo}.json`;
       const filePath = path.join(this.outDir, fileName);
 
@@ -673,7 +667,7 @@ export class GirhubTracker {
    *
    * It writes multiple JSON files (chunked) so your existing summariseAll tooling can process them.
    */
-  public async rebuildAllHistory(
+  public async rebuildAll(
     branch = 'main',
     commitsPerFile = 250
   ): Promise<Record<RepoIdentifier, RepoHistory[]>> {
@@ -685,7 +679,7 @@ export class GirhubTracker {
       console.log(`[GithubTracker][${this.owner}/${repo}] Rebuild starting (branch=${branch})`);
       console.log(`[GithubTracker][${this.owner}/${repo}] Step 1/3: Fetching full commit list from GitHub API...`);
 
-      const itemsNewestFirst = await this.fetchAllCommitItems(repo, branch);
+      const itemsNewestFirst = await this.fetchAll(repo, branch);
 
       console.log(
         `[GithubTracker][${this.owner}/${repo}] Step 1/3: Received ${itemsNewestFirst.length} commit(s).`
@@ -702,7 +696,7 @@ export class GirhubTracker {
       const items = [...itemsNewestFirst].reverse(); // oldest to newest
       const histories: RepoHistory[] = [];
 
-      let current: DecimalVersion = GirhubTracker.parseDecimalVersion("0.00");
+      let current: DecimalVersion = GirhubTracker.parseVer("0.00");
       let lastSeenMajor = 0;
 
       let pending: CommitSummary[] = [];
@@ -746,7 +740,7 @@ export class GirhubTracker {
       );
 
       const progressEvery = Math.max(1, Math.floor(items.length / 200)); // about 0.5% updates
-      const logMessagePreview = (msg: string): string => {
+      const logMsg = (msg: string): string => {
         const oneLine = msg.replace(/\s+/g, ' ').trim();
         if (oneLine.length <= 120) return oneLine;
         return oneLine.slice(0, 117) + '...';
@@ -770,21 +764,19 @@ export class GirhubTracker {
           );
         } else if ((i % progressEvery) === 0) {
           console.log(
-            `[GithubTracker][${this.owner}/${repo}] Progress: idx=${idx}/${items.length} (${pct}%) currentVersion=${GirhubTracker.formatDecimalVersion(current)}`
+            `[GithubTracker][${this.owner}/${repo}] Progress: idx=${idx}/${items.length} (${pct}%) currentVersion=${GirhubTracker.formatVer(current)}`
           );
         }
 
         console.log(
           `[GithubTracker][${this.owner}/${repo}] Checking commit ${idx}/${items.length} (${pct}%) sha=${sha} ` +
-          `date=${date || '(no-date)'} author=${author || '(no-author)'} msg="${logMessagePreview(message)}"`
+          `date=${date || '(no-date)'} author=${author || '(no-author)'} msg="${logMsg(message)}"`
         );
 
-        // 1) Fetch diff (can be slow, so log before/after)
         console.log(`[GithubTracker][${this.owner}/${repo}]   - Fetching diff for ${sha}...`);
         const diff = await this.fetchDiff(repo, sha);
         console.log(`[GithubTracker][${this.owner}/${repo}]   - Diff fetched (${diff.length} chars).`);
 
-        // 2) Read README at this commit to infer major (historical)
         console.log(`[GithubTracker][${this.owner}/${repo}]   - Reading README.md at ${sha} to detect major...`);
         const commitMajor = await this.tryReadmeMajorAtSha(repo, sha, lastSeenMajor);
 
@@ -799,22 +791,21 @@ export class GirhubTracker {
           );
         }
 
-        // 3) Decide tier and bump
-        const before = GirhubTracker.formatDecimalVersion(current);
+        const before = GirhubTracker.formatVer(current);
 
-        const setVer = GirhubTracker.extractSetVersion(message);
+        const setVer = GirhubTracker.extrVer(message);
         if (setVer) {
           console.log(
             `[GithubTracker][${this.owner}/${repo}]   - Found !setver override: ${setVer} (was ${before})`
           );
-          current = GirhubTracker.parseDecimalVersion(setVer);
-          const after = GirhubTracker.formatDecimalVersion(current);
+          current = GirhubTracker.parseVer(setVer);
+          const after = GirhubTracker.formatVer(current);
 
           console.log(
             `[GithubTracker][${this.owner}/${repo}]   - Version set to ${after}`
           );
         } else {
-          const taggedTier = GirhubTracker.decideTierFromMessage(message);
+          const taggedTier = GirhubTracker.tierFromMsg(message);
 
           if (taggedTier) {
             console.log(
@@ -826,7 +817,7 @@ export class GirhubTracker {
             );
           }
 
-          const tier = taggedTier ?? await this.decideTierWithLlm(message, diff);
+          const tier = taggedTier ?? await this.genTier(message, diff);
 
           if (!taggedTier) {
             console.log(
@@ -834,21 +825,21 @@ export class GirhubTracker {
             );
           }
 
-          const next = GirhubTracker.bumpDecimalVersion(
+          const next = GirhubTracker.bumpVer(
             current,
             tier,
             commitMajor > 0 ? commitMajor : null
           );
 
           current = next;
-          const after = GirhubTracker.formatDecimalVersion(current);
+          const after = GirhubTracker.formatVer(current);
 
           console.log(
             `[GithubTracker][${this.owner}/${repo}]   - Version bump: ${before} -> ${after} (tier=${tier})`
           );
         }
 
-        const version = GirhubTracker.formatDecimalVersion(current);
+        const version = GirhubTracker.formatVer(current);
 
         pending.push({
           sha,
@@ -881,14 +872,14 @@ export class GirhubTracker {
 
       console.log(
         `[GithubTracker][${this.owner}/${repo}] Rebuild complete. ` +
-        `files=${histories.length} commits=${items.length} finalVersion=${GirhubTracker.formatDecimalVersion(current)}`
+        `files=${histories.length} commits=${items.length} finalVersion=${GirhubTracker.formatVer(current)}`
       );
     }
 
     return results;
   }
 
-  private async getReadmeVersion(repo: RepoIdentifier, branch: string): Promise<{ major: number; readmeSha: string }> {
+  private async getMdVer(repo: RepoIdentifier, branch: string): Promise<{ major: number; readmeSha: string }> {
     const url = `https://api.github.com/repos/${this.owner}/${repo}/contents/README.md?ref=${encodeURIComponent(branch)}`;
     const resp = await fetch(url, { headers: this.getHeaders() });
 
@@ -920,7 +911,7 @@ export class GirhubTracker {
     versionInfo: { major: number; readmeSha: string },
     stopSha: string
   ): Promise<CommitSummary[]> {
-    const items = await this.fetchCommitItemsUntil(repo, branch, sinceIso, stopSha);
+    const items = await this.fetchCommItms(repo, branch, sinceIso, stopSha);
 
     console.log(`[GithubTracker][${this.owner}/${repo}] fetched=${items.length}`);
 
@@ -945,7 +936,7 @@ export class GirhubTracker {
         message,
         url: htmlUrl,
         diff,
-        version: `${commitMajor}.00` // placeholder used to carry commitReadmeMajor into the bump logic
+        version: `${commitMajor}.00`
       });
     }
 
