@@ -36,6 +36,10 @@ type RepoHistory = {
   commits: CommitSummary[];
 };
 
+type SetverDirective =
+  | { kind: "readmeMajor" }
+  | { kind: "explicit"; rawVersion: string };
+
 function pad(n: number): string {
   return n.toString().padStart(2, '0');
 }
@@ -150,7 +154,7 @@ export class GirhubTracker {
     try {
       const files = await readdir(this.outDir);
       const pattern = this.getHistoryFilePattern(repo);
-      const matches = files.filter(f => pattern.test(f));
+      const matches = files.filter((f) => pattern.test(f));
 
       if (!matches.length) return null;
 
@@ -268,7 +272,7 @@ export class GirhubTracker {
       if (!stopSha) {
         all.push(...pageItems);
       } else {
-        const stopIdx = pageItems.findIndex(c => c.sha === stopSha);
+        const stopIdx = pageItems.findIndex((c) => c.sha === stopSha);
 
         if (stopIdx >= 0) {
           all.push(...pageItems.slice(0, stopIdx + 1));
@@ -359,7 +363,7 @@ export class GirhubTracker {
 
     const major = parseInt(match[1], 10);
     const frac = match[2] ?? "";
-    const digitsRaw = frac.split('').map(ch => parseInt(ch, 10)).filter(n => !Number.isNaN(n));
+    const digitsRaw = frac.split('').map((ch) => parseInt(ch, 10)).filter((n) => !Number.isNaN(n));
 
     const padded: number[] = digitsRaw.slice(0, 6);
     while (padded.length < 6) padded.push(0);
@@ -441,9 +445,21 @@ export class GirhubTracker {
     return next;
   }
 
-  private static extrVer(message: string): string | null {
-    const m = /!setver\s*(?:=|:)\s*(\d+(?:\.\d+)?)/i.exec(message);
-    return m ? m[1] : null;
+  private static parseSetverDirective(message: string): SetverDirective | null {
+    // Forms supported:
+    // - "!setver"
+    // - "!setver 2.123"
+    // - "!setver=2.123"
+    // - "!setver:2.123"
+    // If the next token starts with "!" (example: "!setver !fix"), treat as no-arg mode.
+    const m = /(^|\s)!setver(?:\s*(?:=|:)?\s*([^\s]+))?/i.exec(message);
+    if (!m) return null;
+
+    const token = (m[2] ?? "").trim();
+    if (!token) return { kind: "readmeMajor" };
+    if (token.startsWith("!")) return { kind: "readmeMajor" };
+
+    return { kind: "explicit", rawVersion: token };
   }
 
   private static tierFromMsg(message: string): BumpTier | null {
@@ -598,7 +614,7 @@ export class GirhubTracker {
       let commits = await this.fetchCommits(repo, branch, sinceIso, versionInfo, lastSha);
       commits = commits.reverse(); // oldest to newest
 
-      const lastIdx = lastSha ? commits.findIndex(c => c.sha === lastSha) : -1;
+      const lastIdx = lastSha ? commits.findIndex((c) => c.sha === lastSha) : -1;
 
       if (lastSha && lastIdx < 0) {
         console.warn(
@@ -622,9 +638,19 @@ export class GirhubTracker {
         const commitReadmeMajor = GirhubTracker.parseVer(c.version).major;
         const forcedMajor = commitReadmeMajor > 0 ? commitReadmeMajor : null;
 
-        const setVer = GirhubTracker.extrVer(c.message);
-        if (setVer) {
-          current = GirhubTracker.parseVer(setVer);
+        const setver = GirhubTracker.parseSetverDirective(c.message);
+        if (setver) {
+          if (setver.kind === "explicit") {
+            current = GirhubTracker.parseVer(setver.rawVersion);
+            c.version = setver.rawVersion; // store exactly what was typed
+            outCommits.push(c);
+            continue;
+          }
+
+          if (forcedMajor !== null) {
+            current = { major: forcedMajor, digits: current.digits };
+          }
+
           c.version = GirhubTracker.formatVer(current);
           outCommits.push(c);
           continue;
@@ -792,18 +818,29 @@ export class GirhubTracker {
         }
 
         const before = GirhubTracker.formatVer(current);
+        const setver = GirhubTracker.parseSetverDirective(message);
 
-        const setVer = GirhubTracker.extrVer(message);
-        if (setVer) {
-          console.log(
-            `[GithubTracker][${this.owner}/${repo}]   - Found !setver override: ${setVer} (was ${before})`
-          );
-          current = GirhubTracker.parseVer(setVer);
-          const after = GirhubTracker.formatVer(current);
+        let storedVersionOverride: string | null = null;
 
-          console.log(
-            `[GithubTracker][${this.owner}/${repo}]   - Version set to ${after}`
-          );
+        if (setver) {
+          if (setver.kind === "explicit") {
+            console.log(
+              `[GithubTracker][${this.owner}/${repo}]   - Found !setver explicit override: ${setver.rawVersion} (was ${before})`
+            );
+            current = GirhubTracker.parseVer(setver.rawVersion);
+            storedVersionOverride = setver.rawVersion;
+          } else {
+            if (commitMajor > 0) {
+              console.log(
+                `[GithubTracker][${this.owner}/${repo}]   - Found !setver (README major canon): ${before} -> ${commitMajor}.${before.split(".")[1] ?? "00"}`
+              );
+              current = { major: commitMajor, digits: current.digits };
+            } else {
+              console.log(
+                `[GithubTracker][${this.owner}/${repo}]   - Found !setver but README major not detected, leaving major unchanged (current=${before})`
+              );
+            }
+          }
         } else {
           const taggedTier = GirhubTracker.tierFromMsg(message);
 
@@ -839,7 +876,7 @@ export class GirhubTracker {
           );
         }
 
-        const version = GirhubTracker.formatVer(current);
+        const version = storedVersionOverride ?? GirhubTracker.formatVer(current);
 
         pending.push({
           sha,
