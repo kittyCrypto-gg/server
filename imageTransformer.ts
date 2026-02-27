@@ -15,6 +15,19 @@ import { GIFEncoder, quantize, applyPalette } from "gifenc";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+const ALLOWED_IMAGE_SOURCE_HOSTS = new Set<string>([
+  "kittycrypto.gg",
+]);
+
+function isAllowedImageSourceUrl(u: URL): boolean {
+  if (u.protocol !== "https:") return false;
+
+  const host = u.hostname.toLowerCase();
+  if (host.endsWith(".kittycrypto.gg")) return true;
+
+  return ALLOWED_IMAGE_SOURCE_HOSTS.has(host);
+}
+
 export type SupportedFormat = "svg" | "png" | "gif" | "bmp" | "jpg" | "jpeg" | "tiff" | "tif";
 
 export type ResizeSpec = {
@@ -138,6 +151,14 @@ export class ImageTransformer {
 
   public async transformRemoteUrl(input: TransformRemoteUrlInput): Promise<TransformResult> {
     const srcUrl = this.resolveSrcUrl(input.src, input.baseUrl);
+
+    if (!isAllowedImageSourceUrl(srcUrl)) {
+      throw new ImageTransformError(
+        "BAD_REQUEST",
+        403,
+        `Source not allowed: ${srcUrl.hostname}`,
+      );
+    }
 
     const response = await fetch(srcUrl.toString(), {
       headers: {
