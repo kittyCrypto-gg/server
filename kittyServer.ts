@@ -10,6 +10,7 @@ import crypto from "crypto";
 import { Request, Response } from "express";
 import KittyRequest from "./kittyRequest";
 import { GithubAutoScheduler } from "./blogScheduler";
+import * as ImageTransformer from "./imageTransformer";
 import fetch from "node-fetch"
 import { tokenStore } from "./tokenStore";
 import argon2 from "argon2"
@@ -17,12 +18,134 @@ import express from "express"
 /* @ts-ignore */
 import "dotenv/config"
 
+if (typeof globalThis.fetch !== "function") {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = fetch;
+}
 
 type GithubContentItem = {
     type: "file" | "dir";
     name: string;
     path: string;
 };
+
+type ImgQueryOk = {
+    ok: true;
+    src: string;
+    format: ImageTransformer.SupportedFormat | null;
+    srcFormatHint: ImageTransformer.SupportedFormat | null;
+    resize: { width?: number; height?: number };
+};
+
+type ImgQueryBad = {
+    ok: false;
+    httpStatus: number;
+    message: string;
+};
+
+type ImgQueryParseResult = ImgQueryOk | ImgQueryBad;
+
+function parseImgQuery(req: Request): ImgQueryParseResult {
+    const src = readTrimmedQueryString(req, "src");
+    if (!src) {
+        return { ok: false, httpStatus: 400, message: "Missing mandatory query param: src" };
+    }
+
+    const formatRaw = readTrimmedQueryString(req, "format");
+    const format = normaliseImgFormat(formatRaw);
+    if (formatRaw && !format) {
+        return { ok: false, httpStatus: 400, message: "Invalid format. Use png|jpg|jpeg|gif|bmp|svg|tif|tiff" };
+    }
+
+    const srcFormatHintRaw = readTrimmedQueryString(req, "srcFormatHint") || readTrimmedQueryString(req, "srcFormat");
+    const srcFormatHint = normaliseImgFormat(srcFormatHintRaw);
+    if (srcFormatHintRaw && !srcFormatHint) {
+        return {
+            ok: false,
+            httpStatus: 400,
+            message: "Invalid srcFormat/srcFormatHint. Use png|jpg|jpeg|gif|bmp|svg|tif|tiff",
+        };
+    }
+
+    const width = parsePositiveInt(readTrimmedQueryString(req, "width"));
+    const height = parsePositiveInt(readTrimmedQueryString(req, "height"));
+
+    return {
+        ok: true,
+        src,
+        format,
+        srcFormatHint,
+        resize: { width: width ?? undefined, height: height ?? undefined },
+    };
+}
+
+function readTrimmedQueryString(req: Request, key: string): string {
+    const raw = req.query[key];
+    if (typeof raw !== "string") return "";
+    return raw.trim();
+}
+
+function normaliseImgFormat(value: string): ImageTransformer.SupportedFormat | null {
+    if (!value) return null;
+
+    switch (value.toLowerCase()) {
+        case "jpeg":
+            return "jpeg";
+        case "jpg":
+            return "jpg";
+        case "png":
+            return "png";
+        case "gif":
+            return "gif";
+        case "bmp":
+            return "bmp";
+        case "svg":
+            return "svg";
+        case "tif":
+            return "tif";
+        case "tiff":
+            return "tiff";
+        default:
+            return null;
+    }
+}
+
+function parsePositiveInt(value: string): number | null {
+    if (!value) return null;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    const i = Math.floor(n);
+    return i > 0 ? i : null;
+}
+
+function buildRequestBaseUrl(req: Request): string | undefined {
+    const host = typeof req.headers.host === "string" ? req.headers.host : "";
+    if (!host) return undefined;
+
+    const proto = typeof req.protocol === "string" ? req.protocol : "https";
+    return `${proto}://${host}${req.originalUrl}`;
+}
+
+type ImgResultShape = {
+    body: Uint8Array;
+    contentType: string;
+};
+
+function sendImgResult(res: Response, result: ImgResultShape): void {
+    res.status(200);
+    res.setHeader("Content-Type", result.contentType);
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.send(Buffer.from(result.body));
+}
+
+function sendImgError(res: Response, err: unknown): void {
+    if (err instanceof ImageTransformer.ImageTransformError) {
+        res.status(err.httpStatus).send(err.message);
+        return;
+    }
+
+    const message = err instanceof Error ? err.message : "Unknown error";
+    res.status(500).send(message);
+}
 
 // Server Configuration
 const HOST = process.env.HOST;
@@ -55,6 +178,8 @@ type SseClient = {
 };
 
 const clients: SseClient[] = [];
+
+const imageTransformer = new ImageTransformer.ImageTransformer();
 
 async function updateUsersFile(
     mutate: (doc: any) => void,
@@ -269,6 +394,7 @@ const allowedOrigins = [
     "https://app.kittycrypto.gg",
     "https://chat.kittycrypto.gg",
     "https://srv.kittycrypto.gg",
+    "https://kittycrypto-gg.translate.goog",
     "http://localhost:8000",
 ];
 
@@ -860,6 +986,31 @@ server.app.post("/chatbot/authenticate", async (req: Request, res: Response) => 
         res.status(500).json({ ok: false })
     }
 })
+
+server.app.get("/img", async (req: Request, res: Response) => {
+    const parsed = parseImgQuery(req);
+
+    if (!parsed.ok) {
+        res.status(parsed.httpStatus).send(parsed.message);
+        return;
+    }
+
+    const baseUrl = buildRequestBaseUrl(req);
+
+    try {
+        const result = await imageTransformer.transformRemoteUrl({
+            src: parsed.src,
+            baseUrl,
+            format: parsed.format ?? undefined,
+            srcFormatHint: parsed.srcFormatHint ?? undefined,
+            resize: parsed.resize,
+        });
+
+        sendImgResult(res, result);
+    } catch (err) {
+        sendImgError(res, err);
+    }
+});
 
 const renderer = new Renderer(server);
 
