@@ -7,15 +7,19 @@ import 'dotenv/config';
 
 type BumpTier =
   | "skip"
-  | "major"
-  | "feat"
-  | "fix"
-  | "refactor"
-  | "tiny";
+  | "major"     // integer bump only
+  | "refactor"  // 1st decimal digit
+  | "feat"      // 2nd decimal digit (keeps trailing digits, no carry)
+  | "minor"     // 3rd decimal digit
+  | "fix"       // 4th decimal digit
+  | "tiny";     // 5th decimal digit
+
+type DecimalPrecision = 1 | 2 | 3 | 4 | 5;
 
 type DecimalVersion = {
-  major: number;
-  digits: [number, number, number, number, number, number]; // decimal places, left-to-right
+  major: number; // integer part (top version)
+  digits: [number, number, number, number, number]; // decimal places (1..5), left-to-right
+  precision: DecimalPrecision; // how many decimal digits to display
 };
 
 type RepoIdentifier = string;
@@ -27,7 +31,7 @@ type CommitSummary = {
   message: string;
   url: string;
   diff: string;
-  version: string; // decimal version string, e.g. "2.10", "2.235", "2.100001"
+  version: string; // decimal version string, e.g. "2.9", "2.90", "2.900", "2.9000", "2.90001"
 };
 
 type RepoHistory = {
@@ -57,7 +61,7 @@ interface GitHubCommit {
 }
 
 type LlmTierJson = {
-  tier: "major" | "feat" | "fix" | "refactor" | "tiny";
+  tier: "major" | "refactor" | "feat" | "minor" | "fix" | "tiny";
   confidence: number;
 };
 
@@ -358,15 +362,27 @@ export class GirhubTracker {
     const match = /^(\d+)(?:\.([0-9]+))?$/.exec(trimmed);
 
     if (!match) {
-      return { major: 0, digits: [0, 0, 0, 0, 0, 0] };
+      return { major: 0, digits: [0, 0, 0, 0, 0], precision: 1 };
     }
 
     const major = parseInt(match[1], 10);
     const frac = match[2] ?? "";
-    const digitsRaw = frac.split('').map((ch) => parseInt(ch, 10)).filter((n) => !Number.isNaN(n));
 
-    const padded: number[] = digitsRaw.slice(0, 6);
-    while (padded.length < 6) padded.push(0);
+    const rawDigits = frac.split('')
+      .map((ch) => parseInt(ch, 10))
+      .filter((n) => !Number.isNaN(n));
+
+    const precision: DecimalPrecision = ((): DecimalPrecision => {
+      if (!frac || rawDigits.length === 0) return 1;
+      if (rawDigits.length === 1) return 1;
+      if (rawDigits.length === 2) return 2;
+      if (rawDigits.length === 3) return 3;
+      if (rawDigits.length === 4) return 4;
+      return 5;
+    })();
+
+    const padded: number[] = rawDigits.slice(0, 5);
+    while (padded.length < 5) padded.push(0);
 
     return {
       major: Number.isNaN(major) ? 0 : major,
@@ -375,74 +391,95 @@ export class GirhubTracker {
         GirhubTracker.clampDigit(padded[1]),
         GirhubTracker.clampDigit(padded[2]),
         GirhubTracker.clampDigit(padded[3]),
-        GirhubTracker.clampDigit(padded[4]),
-        GirhubTracker.clampDigit(padded[5])
-      ]
+        GirhubTracker.clampDigit(padded[4])
+      ],
+      precision
     };
   }
 
   private static formatVer(v: DecimalVersion): string {
-    const digits = v.digits;
-
-    let lastNonZero = -1;
-    for (let i = digits.length - 1; i >= 0; i -= 1) {
-      if (digits[i] !== 0) {
-        lastNonZero = i;
-        break;
-      }
-    }
-
-    const minDigits = 2; // always show at least feat+fix like "2.10"
-    const used = Math.max(minDigits, lastNonZero + 1);
-    const frac = digits.slice(0, used).join('');
-
+    const frac = v.digits.slice(0, v.precision).join('');
     return `${v.major}.${frac}`;
   }
 
-  private static bumpVer(base: DecimalVersion, tier: BumpTier, commitMd: number | null): DecimalVersion {
-    const majSync = (commitMd !== null && commitMd > base.major);
-    const baseSync: DecimalVersion = majSync
-      ? { major: commitMd as number, digits: [0, 0, 0, 0, 0, 0] }
-      : base;
+  private static withPrecisionFloor(v: DecimalVersion, precision: DecimalPrecision): DecimalVersion {
+    const digits: DecimalVersion["digits"] = [...v.digits] as DecimalVersion["digits"];
 
-    if (tier === "skip") return baseSync;
-
-    if (tier === "major") {
-      if (majSync) return baseSync;
-      return { major: base.major + 1, digits: [0, 0, 0, 0, 0, 0] };
+    for (let i = precision; i < 5; i += 1) {
+      (digits as number[])[i] = 0;
     }
 
-    const next: DecimalVersion = { major: baseSync.major, digits: [...baseSync.digits] as DecimalVersion["digits"] };
+    return { major: v.major, digits, precision };
+  }
 
-    const tierToIndex: Record<Exclude<BumpTier, "skip" | "major">, number> = {
-      feat: 0,
-      fix: 1,
-      refactor: 2,
-      tiny: 5
-    };
-
-    const idx = tierToIndex[tier];
-
-    for (let i = idx + 1; i < next.digits.length; i += 1) {
-      next.digits[i] = 0;
-    }
-
-    next.digits[idx] += 1;
+  private static incAt(v: DecimalVersion, idx: 0 | 1 | 2 | 3 | 4): DecimalVersion {
+    const digits: DecimalVersion["digits"] = [...v.digits] as DecimalVersion["digits"];
+    digits[idx] += 1;
 
     for (let i = idx; i >= 0; i -= 1) {
-      if (next.digits[i] <= 9) break;
+      if (digits[i] <= 9) return { major: v.major, digits, precision: v.precision };
 
-      next.digits[i] = 0;
+      digits[i] = 0;
 
       if (i === 0) {
-        next.major += 1;
-        break;
+        return { major: v.major + 1, digits, precision: v.precision };
       }
 
-      next.digits[i - 1] += 1;
+      digits[i - 1] += 1;
     }
 
-    return next;
+    return { major: v.major, digits, precision: v.precision };
+  }
+
+  private static bumpMajorTier(base: DecimalVersion): DecimalVersion {
+    return { major: base.major + 1, digits: [0, 0, 0, 0, 0], precision: 1 };
+  }
+
+  private static bumpRefactorTier(base: DecimalVersion): DecimalVersion {
+    const floored = GirhubTracker.withPrecisionFloor(base, 1);
+    return GirhubTracker.incAt(floored, 0);
+  }
+
+  private static bumpFeatTier(base: DecimalVersion): DecimalVersion {
+    // Feat keeps trailing digits and does not carry, so if the target digit is 9 we do nothing.
+    if (base.digits[1] >= 9) return base;
+
+    const digits: DecimalVersion["digits"] = [...base.digits] as DecimalVersion["digits"];
+    digits[1] += 1;
+
+    const precision: DecimalPrecision = base.precision >= 2 ? base.precision : 2;
+
+    return { major: base.major, digits, precision };
+  }
+
+  private static bumpMinorTier(base: DecimalVersion): DecimalVersion {
+    const floored = GirhubTracker.withPrecisionFloor(base, 3);
+    return GirhubTracker.incAt(floored, 2);
+  }
+
+  private static bumpFixTier(base: DecimalVersion): DecimalVersion {
+    const floored = GirhubTracker.withPrecisionFloor(base, 4);
+    return GirhubTracker.incAt(floored, 3);
+  }
+
+  private static bumpTinyTier(base: DecimalVersion): DecimalVersion {
+    const floored = GirhubTracker.withPrecisionFloor(base, 5);
+    return GirhubTracker.incAt(floored, 4);
+  }
+
+  private static setverToReadmeMajor(readmeMajor: number): DecimalVersion {
+    const safeMajor = Number.isFinite(readmeMajor) && readmeMajor >= 0 ? Math.trunc(readmeMajor) : 0;
+    return { major: safeMajor, digits: [0, 0, 0, 0, 0], precision: 1 };
+  }
+
+  private static bumpVer(base: DecimalVersion, tier: BumpTier): DecimalVersion {
+    if (tier === "skip") return base;
+    if (tier === "major") return GirhubTracker.bumpMajorTier(base);
+    if (tier === "refactor") return GirhubTracker.bumpRefactorTier(base);
+    if (tier === "feat") return GirhubTracker.bumpFeatTier(base);
+    if (tier === "minor") return GirhubTracker.bumpMinorTier(base);
+    if (tier === "fix") return GirhubTracker.bumpFixTier(base);
+    return GirhubTracker.bumpTinyTier(base);
   }
 
   private static parseSetverDirective(message: string): SetverDirective | null {
@@ -469,12 +506,26 @@ export class GirhubTracker {
 
     const has = (tag: string): boolean => lower.includes(`!${tag}`);
 
-    if (has('major') || has('breaking') || has('break') || has('breaking-change') || has('api-break') || has('schema-break') || has('remove')) return "major";
-    if (has('feat') || has('feature') || has('minor') || has('add') || has('new') || has('enhance') || has('extend')) return "feat";
+    // Major is now strictly an integer bump.
+    if (
+      has('major') || has('breaking') || has('break') || has('breaking-change') ||
+      has('api-break') || has('schema-break') || has('remove')
+    ) return "major";
+
+    // Refactor is the first decimal digit bump.
+    if (
+      has('refactor') || has('perf') || has('optimise') || has('optimize') ||
+      has('cleanup') || has('internal') || has('techdebt')
+    ) return "refactor";
+
+    if (has('feat') || has('feature') || has('add') || has('new') || has('enhance') || has('extend')) return "feat";
+
+    if (has('minor') || has('min') || has('tweak') || has('improve')) return "minor";
+
     if (has('fix') || has('bug') || has('bugfix') || has('patch') || has('hotfix') || has('security') || has('regression') || has('stability')) return "fix";
-    if (has('refactor') || has('perf') || has('optimise') || has('cleanup') || has('internal') || has('techdebt')) return "refactor";
 
     if (
+      has('tiny') ||
       has('docs') || has('doc') || has('readme') || has('comment') || has('comments') || has('typo') ||
       has('test') || has('tests') || has('qa') ||
       has('build') || has('ci') || has('deps') || has('dep') || has('bump') || has('upgrade') || has('tooling') ||
@@ -508,23 +559,26 @@ export class GirhubTracker {
     ].join('\n');
   }
 
-  private static parseTJson(raw: string): LlmTierJson | null {
+  private static parseTJson(raw: string): { tier: Exclude<BumpTier, "skip">; confidence: number } | null {
     try {
       const obj = JSON.parse(raw) as Record<string, unknown>;
-      const tier = obj.tier;
+      const tierRaw = obj.tier;
       const confidence = obj.confidence;
 
-      const okTier =
-        tier === "major" ||
-        tier === "feat" ||
-        tier === "fix" ||
-        tier === "refactor" ||
-        tier === "tiny";
+      const mappedTier: Exclude<BumpTier, "skip"> | null = (() => {
+        if (tierRaw === "major") return "major";
+        if (tierRaw === "refactor") return "refactor";
+        if (tierRaw === "feat") return "feat";
+        if (tierRaw === "minor") return "minor";
+        if (tierRaw === "fix") return "fix";
+        if (tierRaw === "tiny") return "tiny";
+        return null;
+      })();
 
-      if (!okTier) return null;
+      if (!mappedTier) return null;
+
       const conf = typeof confidence === "number" ? confidence : 0;
-
-      return { tier, confidence: Math.max(0, Math.min(1, conf)) };
+      return { tier: mappedTier, confidence: Math.max(0, Math.min(1, conf)) };
     } catch {
       return null;
     }
@@ -535,12 +589,13 @@ export class GirhubTracker {
 
     const systemPrompt =
       "You classify a single git commit into a release-impact tier.\n" +
-      "Return ONLY valid JSON: {\"tier\":\"major|feat|fix|refactor|tiny\",\"confidence\":0..1}.\n" +
+      "Return ONLY valid JSON: {\"tier\":\"major|refactor|feat|minor|fix|tiny\",\"confidence\":0..1}.\n" +
       "Tier meanings:\n" +
-      "- major: breaking public API/behaviour, incompatible schema/config/protocol change, removed/renamed exports.\n" +
-      "- feat: new user-facing capability, new public API/endpoint/command/config option that adds behaviour.\n" +
-      "- fix: bug/security/regression fix, correctness fix.\n" +
-      "- refactor: internal restructure or performance improvement with no intended behaviour change.\n" +
+      "- major: breaking public API or behaviour, incompatible schema/config/protocol change, removed or renamed public exports.\n" +
+      "- refactor: internal restructure or performance work with no intended behaviour change.\n" +
+      "- feat: new user-facing capability or new public API that adds behaviour.\n" +
+      "- minor: smaller user-facing improvement that is not a full feature and not a bugfix.\n" +
+      "- fix: bug or security fix, correctness or regression fix.\n" +
       "- tiny: docs/tests/ci/style/deps/tooling/housekeeping or unclear minimal impact.\n" +
       "Choose the highest applicable tier. If unsure, choose tiny.";
 
@@ -600,7 +655,7 @@ export class GirhubTracker {
       const sinceIso = this.compSince(sinceDays, lastCommitDate);
       const versionInfo = await this.getMdVer(repo, branch);
 
-      const baseFromReadme = `${versionInfo.major}.00`;
+      const baseFromReadme = `${versionInfo.major}.0`;
       let current = GirhubTracker.parseVer(baseVersionStr ?? baseFromReadme);
 
       console.log(
@@ -636,7 +691,6 @@ export class GirhubTracker {
 
       for (const c of newCommits) {
         const commitReadmeMajor = GirhubTracker.parseVer(c.version).major;
-        const forcedMajor = commitReadmeMajor > 0 ? commitReadmeMajor : null;
 
         const setver = GirhubTracker.parseSetverDirective(c.message);
         if (setver) {
@@ -647,8 +701,8 @@ export class GirhubTracker {
             continue;
           }
 
-          if (forcedMajor !== null) {
-            current = { major: forcedMajor, digits: current.digits };
+          if (commitReadmeMajor > 0) {
+            current = GirhubTracker.setverToReadmeMajor(commitReadmeMajor);
           }
 
           c.version = GirhubTracker.formatVer(current);
@@ -659,7 +713,7 @@ export class GirhubTracker {
         const taggedTier = GirhubTracker.tierFromMsg(c.message);
         const tier = taggedTier ?? await this.genTier(c.message, c.diff);
 
-        const next = GirhubTracker.bumpVer(current, tier, forcedMajor);
+        const next = GirhubTracker.bumpVer(current, tier);
         current = next;
 
         c.version = GirhubTracker.formatVer(current);
@@ -689,7 +743,7 @@ export class GirhubTracker {
    * Rebuilds commit history JSON files from the first commit to the latest commit on the branch.
    * This is intended as a one-off migration to the new versioning scheme.
    *
-   * Important: major version is derived from README.md at each commit SHA (not from the current README).
+   * Important: README major is only applied when "!setver" (no argument) is present.
    *
    * It writes multiple JSON files (chunked) so your existing summariseAll tooling can process them.
    */
@@ -722,7 +776,7 @@ export class GirhubTracker {
       const items = [...itemsNewestFirst].reverse(); // oldest to newest
       const histories: RepoHistory[] = [];
 
-      let current: DecimalVersion = GirhubTracker.parseVer("0.00");
+      let current: DecimalVersion = GirhubTracker.parseVer("0.0");
       let lastSeenMajor = 0;
 
       let pending: CommitSummary[] = [];
@@ -808,12 +862,12 @@ export class GirhubTracker {
 
         if (commitMajor > 0 && commitMajor !== lastSeenMajor) {
           console.log(
-            `[GithubTracker][${this.owner}/${repo}]   - Major changed via README: ${lastSeenMajor} -> ${commitMajor}`
+            `[GithubTracker][${this.owner}/${repo}]   - README major changed: ${lastSeenMajor} -> ${commitMajor}`
           );
           lastSeenMajor = commitMajor;
         } else {
           console.log(
-            `[GithubTracker][${this.owner}/${repo}]   - Major detected: ${commitMajor} (lastSeenMajor=${lastSeenMajor})`
+            `[GithubTracker][${this.owner}/${repo}]   - README major detected: ${commitMajor} (lastSeenMajor=${lastSeenMajor})`
           );
         }
 
@@ -831,13 +885,14 @@ export class GirhubTracker {
             storedVersionOverride = setver.rawVersion;
           } else {
             if (commitMajor > 0) {
+              const nextFromReadme = GirhubTracker.setverToReadmeMajor(commitMajor);
               console.log(
-                `[GithubTracker][${this.owner}/${repo}]   - Found !setver (README major canon): ${before} -> ${commitMajor}.${before.split(".")[1] ?? "00"}`
+                `[GithubTracker][${this.owner}/${repo}]   - Found !setver (README major): ${before} -> ${GirhubTracker.formatVer(nextFromReadme)}`
               );
-              current = { major: commitMajor, digits: current.digits };
+              current = nextFromReadme;
             } else {
               console.log(
-                `[GithubTracker][${this.owner}/${repo}]   - Found !setver but README major not detected, leaving major unchanged (current=${before})`
+                `[GithubTracker][${this.owner}/${repo}]   - Found !setver but README major not detected, leaving version unchanged (current=${before})`
               );
             }
           }
@@ -862,11 +917,7 @@ export class GirhubTracker {
             );
           }
 
-          const next = GirhubTracker.bumpVer(
-            current,
-            tier,
-            commitMajor > 0 ? commitMajor : null
-          );
+          const next = GirhubTracker.bumpVer(current, tier);
 
           current = next;
           const after = GirhubTracker.formatVer(current);
@@ -973,7 +1024,7 @@ export class GirhubTracker {
         message,
         url: htmlUrl,
         diff,
-        version: `${commitMajor}.00`
+        version: `${commitMajor}.0`
       });
     }
 
