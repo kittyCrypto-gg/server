@@ -1011,6 +1011,14 @@ server.app.get("/img", async (req: Request, res: Response) => {
     }
 });
 
+server.app.get("/status", (_req: Request, res: Response) => {
+    res.status(200).json({
+        ok: true,
+        online: true,
+        now: new Date().toISOString()
+    });
+});
+
 const renderer = new Renderer(server);
 
 server.start();
