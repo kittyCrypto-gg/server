@@ -1,5 +1,6 @@
 import { GirhubTracker } from "./githubTracker";
 import { autoBlogger, ModeratorStrings } from "./autoBlogger";
+import { versionTracker } from "./readmeUpdater";
 import { OpenAI } from "openai";
 import { readFileSync } from "fs";
 import path from "path";
@@ -75,6 +76,26 @@ export class GithubAutoScheduler {
         console.log(`✅ Auto-tracked and blogged for ${repo} at ${new Date().toISOString()}`);
       } catch (err) {
         console.error(`❌ Error running tracking or blogging for ${repo}:`, err);
+      }
+
+      try {
+        const readmeUpdater = new versionTracker(this.owner, this.repos, {
+          branch: this.branch,
+          outDirName: 'commitsTracker',
+          dryRun: false
+        });
+
+        const results = await readmeUpdater.publish();
+
+        for (const r of results) {
+          if (r.kind === 'updated') {
+            console.log(`[readmeUpdater] UPDATED ${this.owner}/${r.repo} ${r.from} -> ${r.to} commit=${r.commitSha}`);
+          } else {
+            console.log(`[readmeUpdater] SKIP ${this.owner}/${r.repo} reason=${r.reason}`);
+          }
+        }
+      } catch (err) {
+        console.error('❌ Error updating READMEs:', err);
       }
     }
   }
