@@ -2,6 +2,7 @@ import { GirhubTracker } from "./githubTracker";
 import { autoBlogger, ModeratorStrings } from "./autoBlogger";
 import { OpenAI } from "openai";
 import { readFileSync } from "fs";
+import path from "path";
 /* @ts-ignore */
 import "dotenv/config"
 
@@ -23,7 +24,9 @@ export class GithubAutoScheduler {
   private branch: string;
   private sinceDays: number;
   private openai: OpenAI = openai;
+  private readonly stringsPath: string;
   private strings: { [key: string]: ModeratorStrings };
+
 
   constructor(opts: GithubAutoSchedulerOptions) {
     this.owner = opts.owner;
@@ -31,7 +34,8 @@ export class GithubAutoScheduler {
     this.blogUser = opts.blogUser ?? "Kitty";
     this.branch = opts.branch ?? "main";
     this.sinceDays = opts.sinceDays ?? 30;
-    this.strings = JSON.parse(readFileSync("./strings.json", "utf-8"));
+    this.stringsPath = path.resolve(process.cwd(), "data", "strings.json");
+    this.strings = JSON.parse(readFileSync(this.stringsPath, "utf-8"));
     this.scheduleNext();
   }
 
@@ -55,8 +59,8 @@ export class GithubAutoScheduler {
         const tracker = new GirhubTracker(this.owner, [repo]);
         console.log(`[githubTracker] Fetching commits for ${repo} since last ${this.sinceDays} days...`);
         await tracker.getCommits(this.branch, this.sinceDays);
-        //console.log(`[githubTracker] Rebuilding history for ${repo}...`);
-        //await tracker.rebuildAllHistory(this.branch);
+        // console.log(`[githubTracker] Rebuilding history for ${repo}...`);
+        // await tracker.rebuildAll(this.branch);
 
         const blogger = new autoBlogger(this.owner, repo, this.openai, this.strings);
 

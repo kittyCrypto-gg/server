@@ -75,12 +75,12 @@ export class GirhubTracker {
   constructor(
     owner: string,
     repos: RepoIdentifier | RepoIdentifier[],
-    outDir = './commitsTracker',
+    outDir = 'commitsTracker',
     openai?: OpenAI
   ) {
     this.owner = owner;
     this.repos = Array.isArray(repos) ? repos : [repos];
-    this.outDir = path.resolve(process.cwd(), outDir);
+    this.outDir = path.resolve(process.cwd(), "data", outDir);
     this.githubToken = process.env.GITHUB_TOKEN;
 
     const apiKey = process.env.OPENAI_KEY || "";
@@ -164,7 +164,8 @@ export class GirhubTracker {
 
       matches.sort();
       const latest = matches[matches.length - 1];
-      const json = await readFile(path.join(this.outDir, latest), 'utf-8');
+      const jsonPath = path.join(this.outDir, latest);
+      const json = await readFile(jsonPath, 'utf-8');
       return { file: latest, data: JSON.parse(json) as RepoHistory };
     } catch {
       return null;

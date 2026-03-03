@@ -51,15 +51,13 @@ export class autoBlogger {
     repo: string,
     openai: OpenAI,
     strings: { [key: string]: ModeratorStrings },
-    commitsDir = './commitsTracker',
-    postsDir = './blogposts'
   ) {
     this.owner = owner;
     this.repo = repo;
     this.openai = openai;
     this.strings = strings;
-    this.commitsDir = path.resolve(process.cwd(), commitsDir);
-    this.postsDir = path.resolve(process.cwd(), postsDir);
+    this.commitsDir = path.resolve(process.cwd(), "data", "commitsTracker");
+    this.postsDir = path.resolve(process.cwd(), "data", "blogposts");
   }
 
   private static diffLines(before: string, after: string): LineChange[] {

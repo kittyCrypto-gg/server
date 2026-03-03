@@ -44,8 +44,8 @@ const encryptChat = (chatFilePath: string, outputFilePath: string, key: Buffer) 
 };
 
 // Run encryption process
-const chatFilePath = path.join(__dirname, "chat.json");
-const outputFilePath = path.join(__dirname, "encrypted_chat.json");
+const chatFilePath = path.resolve(process.cwd(), "data", "chat.json");
+const outputFilePath = path.resolve(process.cwd(), "data", "encrypted_chat.json");
 const generatedKey = generateKey();
 
 console.log("🔑 Generated Key (Save this for decryption!):", generatedKey.toString("base64"));

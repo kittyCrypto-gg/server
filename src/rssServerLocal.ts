@@ -32,7 +32,7 @@ if (isNaN(RSS_PORT) || RSS_PORT <= 0 || RSS_PORT > 65535) {
 }
 
 class RssServerLocal extends RssServer {
-    private localPostsDir: string = "./blogposts";
+    private localPostsDir: string =  path.resolve(process.cwd(), "data", "blogposts");
     private localFeedSlug: string = "kittycrypto";
     private localFeedTitle: string = "Kitty’s Blog";
     private localFeedDescription: string = "Personal posts from Kitty’s blog";

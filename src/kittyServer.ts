@@ -164,7 +164,7 @@ if (isNaN(PORT) || PORT <= 0 || PORT > 65535) {
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
-const chatbot_PATH = path.join(__dirname, "chatbot_users.gcm.json")
+const chatbot_PATH = path.resolve(process.cwd(), "data", "chatbot_users.gcm.json")
 const CHATBOT_API_KEY = process.env.CHATBOT_API_KEY
 
 if (!CHATBOT_API_KEY) {
@@ -378,12 +378,11 @@ async function getHtmlPagesFromGithub(repoOwner: string, repoName: string, dir: 
 }
 
 // Chat JSON File Path
-//const chat_json_path = path.join(__dirname, "chat.json");
-const chat_json_path = path.join(__dirname, "chat.gcm.json");
+const chat_json_path = path.resolve(process.cwd(), "data", "chat.gcm.json");
 // console.log(`Chat JSON File Path: ${chat_json_path}`);
 
 // Comments JSON File Path
-const comments_json_path = path.join(__dirname, "comments.json");
+const comments_json_path = path.resolve(process.cwd(), "data", "comments.json");
 // console.log(`Comments JSON File Path: ${comments_json_path}`);
 
 const allowedOrigins = [
@@ -634,7 +633,7 @@ server.app.get('/robots.txt', (req, res) => { // Serve robots.txt
     );
 });
 
-const storiesRoot = path.resolve(__dirname, "stories");
+const storiesRoot = path.resolve(process.cwd(), "stories");
 
 type StoriesIndex = Record<string, string[]>;
 
@@ -791,7 +790,7 @@ server.app.get(["/sitemap.xml", "/website/sitemap.xml"], async (req, res) => {
     }
 });
 
-const allowedSourcesPath = path.join(__dirname, "data", "allowedSources.json");
+const allowedSourcesPath = path.resolve(process.cwd(), "data", "allowedSources.json");
 
 server.app.get("/allowedSources.json", async (_req: Request, res: Response) => {
     try {

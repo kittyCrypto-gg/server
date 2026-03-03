@@ -9,6 +9,7 @@ import nlp from 'compromise';
 import dates from 'compromise-dates';
 import { aiParser } from "./aiParser";
 import Parser from "rss-parser";
+import path from "path";
 /* @ts-ignore */
 import "dotenv/config"
 
@@ -28,16 +29,16 @@ if (isNaN(PORT) || PORT <= 0 || PORT > 65535) {
 
 const nlpWithDates = nlp.extend(dates);
 
-const SOURCES_FILE = "rssSources.json";
-const RSS_CACHE_DIR = "./rss";
+const SOURCES_FILE = path.resolve(process.cwd(), "data", "rssSources.json");
+const RSS_CACHE_DIR = path.resolve(process.cwd(), "data", "rss");
 
 interface MetaDoc {
-  getElementsByTagName(tag: string): {
-    length: number;
-    item(index: number): {
-      getAttribute(name: string): string | null;
-    } | null;
-  };
+    getElementsByTagName(tag: string): {
+        length: number;
+        item(index: number): {
+            getAttribute(name: string): string | null;
+        } | null;
+    };
 }
 
 class RssServer extends Server {

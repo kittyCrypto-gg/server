@@ -49,7 +49,7 @@ export class tokenStore {
         this.sessionTokens = sessionTokens;
         this.onTokensChanged = onTokensChanged;
 
-        this.filePath = opts.filePath ?? path.join(__dirname, "sessionTokens.json");
+        this.filePath = opts.filePath ?? path.resolve(process.cwd(), "data", "sessionTokens.json");
         this.ttlMs = opts.ttlMs ?? 24 * 60 * 60 * 1000;
         this.saveDebounceMs = opts.saveDebounceMs ?? 250;
         this.cleanupIntervalMs = opts.cleanupIntervalMs ?? 60_000;

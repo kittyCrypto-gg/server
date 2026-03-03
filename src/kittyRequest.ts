@@ -13,7 +13,7 @@ type HandleRequestOpts = {
 
 class KittyRequest<T extends object> {
     protected server: Server;
-    protected jsonFilePath: string;
+    protected readonly jsonFilePath: string;
     protected validateRequest: (data: unknown) => data is T;
     protected TokenStore: tokenStore;
 

@@ -5,6 +5,7 @@ import { OpenAI } from "openai";
 import Server from "./baseServer";
 import KittyRequest from "./kittyRequest";
 import { tokenStore } from "./tokenStore";
+import path from "path";
 /* @ts-ignore */
 import "dotenv/config"
 
@@ -37,6 +38,7 @@ interface ModeratorStrings {
 }
 
 class Chat extends KittyRequest<ChatMessage> {
+    protected readonly stringsFilePath: string;
     private strings: { [key: string]: ModeratorStrings };
     private messageCache: ChatMessage[] | null = null;
     private ready: boolean = false;
@@ -44,7 +46,8 @@ class Chat extends KittyRequest<ChatMessage> {
     constructor(server: Server, jsonFilePath: string, TokenStore: tokenStore) {
 
         super(server, jsonFilePath, TokenStore, Chat.isValidChatMessage);
-        this.strings = JSON.parse(fs.readFileSync("./strings.json", "utf-8"));
+        this.stringsFilePath = path.resolve(process.cwd(), "data", "strings.json");
+        this.strings = JSON.parse(fs.readFileSync(this.stringsFilePath, "utf-8"));
         try {
             // Register the chat endpoint
             this.server.app.post("/chat", async (req: Request, res: Response) => {

@@ -4,6 +4,7 @@ import KittyRequest from "./kittyRequest";
 import { tokenStore } from "./tokenStore";
 import { OpenAI } from "openai";
 import fs from "fs";
+import path from "path";
 /* @ts-ignore */
 import "dotenv/config"
 
@@ -28,12 +29,15 @@ export interface CommentData {
 class Comment extends KittyRequest<CommentData> {
   private strings: { [key: string]: ModeratorStrings } = {};
   private ready: boolean = false;
+  private readonly stringsFilePath: string;
 
   constructor(server: Server, commentsPath: string, TokenStore: tokenStore) {
     super(server, commentsPath, TokenStore, Comment.isValidComment);
-
+    this.stringsFilePath = path.resolve(process.cwd(), "data", "strings.json");
+    
     try {
-      this.strings = JSON.parse(fs.readFileSync("./strings.json", "utf-8"));
+
+      this.strings = JSON.parse(fs.readFileSync(this.stringsFilePath, "utf-8"));
     } catch {
       console.warn("⚠️ Could not load strings.json for moderator.");
       this.ready = false;
