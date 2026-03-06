@@ -6,5 +6,9 @@
   "compatibility_flags": ["nodejs_compat"],
   "browser": {
     "binding": "MYBROWSER"
+  },
+  "vars": {
+    "RENDER_ENDPOINT": "https://srv.kittycrypto.gg/render",
+    "TARGET_ORIGIN": "https://kittycrypto.gg"
   }
 }
