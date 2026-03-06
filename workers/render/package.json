@@ -1,0 +1,17 @@
+{
+  "name": "render-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "types": "wrangler types",
+    "build": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/puppeteer": "^1.0.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0",
+    "wrangler": "^4.0.0"
+  }
+}

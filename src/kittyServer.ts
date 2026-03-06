@@ -1,7 +1,6 @@
 import path from "path";
 import Server from "./baseServer";
 import Chat from "./kittyChat";
-import Renderer from "./kittyWebsite";
 import Comment from "./kittyComment";
 import { CommentData } from "./kittyComment";
 import cors from "cors";
@@ -15,6 +14,7 @@ import fetch from "node-fetch"
 import { tokenStore } from "./tokenStore";
 import argon2 from "argon2"
 import express from "express"
+import { renderPage } from "./render";
 /* @ts-ignore */
 import "dotenv/config"
 
@@ -166,6 +166,8 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
 const chatbot_PATH = path.resolve(process.cwd(), "data", "chatbot_users.gcm.json")
 const CHATBOT_API_KEY = process.env.CHATBOT_API_KEY
+
+const RENDER_TOKEN = process.env.RENDER_TOKEN || "";
 
 if (!CHATBOT_API_KEY) {
     console.error("❌ CHATBOT_API_KEY not set")
@@ -379,7 +381,6 @@ async function getHtmlPagesFromGithub(repoOwner: string, repoName: string, dir: 
 
 // Chat JSON File Path
 const chat_json_path = path.resolve(process.cwd(), "data", "chat.gcm.json");
-// console.log(`Chat JSON File Path: ${chat_json_path}`);
 
 // Comments JSON File Path
 const comments_json_path = path.resolve(process.cwd(), "data", "comments.json");
@@ -387,7 +388,7 @@ const comments_json_path = path.resolve(process.cwd(), "data", "comments.json");
 
 const allowedOrigins = [
     "https://kittycrypto.gg",
-    "https://render.kittycrypto.gg",
+    "https://nojs.kittycrypto.gg",
     "https://test.kittycrypto.gg",
     "https://api.kittycrypto.gg",
     "https://app.kittycrypto.gg",
@@ -1011,6 +1012,56 @@ server.app.get("/img", async (req: Request, res: Response) => {
     }
 });
 
+server.app.get("/render", async (req: Request, res: Response) => {
+    const token = req.header("x-render-token")?.trim() || "";
+
+    if (RENDER_TOKEN && token !== RENDER_TOKEN) {
+        res.status(403).send("Forbidden");
+        return;
+    }
+
+    const readString = (value: unknown): string => {
+        return typeof value === "string" ? value.trim() : "";
+    };
+
+    const url =
+        req.method === "GET"
+            ? readString(req.query.url)
+            : readString((req.body as { url?: unknown } | undefined)?.url);
+
+    const waitForSelector =
+        req.method === "GET"
+            ? readString(req.query.waitForSelector)
+            : readString((req.body as { waitForSelector?: unknown } | undefined)?.waitForSelector);
+
+    if (!url) {
+        res.status(400).send("Missing url");
+        return;
+    }
+
+    try {
+        const result = await renderPage(
+            {
+                url,
+                waitForSelector: waitForSelector || undefined
+            },
+            {
+                token: RENDER_TOKEN || undefined,
+                allowedOrigins: ["https://kittycrypto.gg"]
+            }
+        );
+
+        res.status(result.status);
+        res.setHeader("Content-Type", "text/html; charset=UTF-8");
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("X-Render-Final-Url", result.finalUrl);
+        res.send(result.html);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(500).send(`Render failed: ${message}`);
+    }
+});
+
 server.app.get("/status", (_req: Request, res: Response) => {
     res.status(200).json({
         ok: true,
@@ -1019,8 +1070,6 @@ server.app.get("/status", (_req: Request, res: Response) => {
     });
 });
 
-const renderer = new Renderer(server);
-
 server.start();
 trackChatChanges();
 
@@ -1028,7 +1077,6 @@ trackChatChanges();
 
 console.log(chat.readyMessage());
 console.log(comment.readyMessage());
-console.log(renderer.readyMessage());
 
 console.log(`🚀 Kitty Server is running on https://${HOST}:${PORT}`);
 

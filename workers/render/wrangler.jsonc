@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "render",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "browser": {
+    "binding": "MYBROWSER"
+  }
+}
