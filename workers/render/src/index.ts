@@ -118,8 +118,9 @@ function rewriteLocation(
 
     try {
         const absolute = new URL(location, targetOrigin);
+        const targetBase = new URL(targetOrigin);
 
-        if (absolute.origin !== new URL(targetOrigin).origin) {
+        if (absolute.origin !== targetBase.origin) {
             return;
         }
 
@@ -130,7 +131,7 @@ function rewriteLocation(
 
         headers.set("location", next.toString());
     } catch {
-        // Leave invalid Location headers untouched.
+        // Ignore invalid Location headers.
     }
 }
 
@@ -169,20 +170,24 @@ async function fetchRenderedHtml(
     targetUrl: URL,
     env: Env
 ): Promise<Response> {
-    const headers = new Headers({
-        "content-type": "application/json"
-    });
+    const endpoint = env.RENDER_ENDPOINT?.trim();
 
-    if (env.RENDER_TOKEN) {
-        headers.set("x-render-token", env.RENDER_TOKEN);
+    if (!endpoint) {
+        throw new Error("Missing RENDER_ENDPOINT.");
     }
 
-    return fetch(env.RENDER_ENDPOINT, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-            url: targetUrl.toString()
-        })
+    const renderUrl = new URL(endpoint);
+    renderUrl.searchParams.set("url", targetUrl.toString());
+
+    const headers = new Headers();
+
+    if (env.RENDER_TOKEN?.trim()) {
+        headers.set("x-render-token", env.RENDER_TOKEN.trim());
+    }
+
+    return fetch(renderUrl.toString(), {
+        method: "GET",
+        headers
     });
 }
 
@@ -192,57 +197,76 @@ export default {
         env: Env,
         ctx: ExecutionContext
     ): Promise<Response> {
-        const inUrl = new URL(request.url);
-        const origin = getOrigin(request, env);
-        const targetUrl = new URL(`${inUrl.pathname}${inUrl.search}`, origin);
+        try {
+            const inUrl = new URL(request.url);
+            const origin = getOrigin(request, env);
+            const targetUrl = new URL(`${inUrl.pathname}${inUrl.search}`, origin);
 
-        if (new URL(origin).origin === inUrl.origin) {
-            return new Response(
-                "Render failed: target origin resolves to the render host.",
-                {
-                    status: 500,
-                    headers: {
-                        "content-type": "text/plain; charset=UTF-8"
+            if (new URL(origin).origin === inUrl.origin) {
+                return new Response(
+                    "Render failed: target origin resolves to the render host.",
+                    {
+                        status: 500,
+                        headers: {
+                            "content-type": "text/plain; charset=UTF-8"
+                        }
                     }
-                }
-            );
-        }
-
-        if (shouldProxy(request, inUrl)) {
-            return proxyReq(request, targetUrl, origin, inUrl.origin);
-        }
-
-        const canCache = canHtmlCache(request, inUrl);
-        const edgeCache = await caches.open("render-html");
-        const cacheKey = new Request(request.url, request);
-
-        if (canCache) {
-            const hit = await edgeCache.match(cacheKey);
-
-            if (hit) {
-                return hit;
+                );
             }
+
+            if (shouldProxy(request, inUrl)) {
+                return proxyReq(request, targetUrl, origin, inUrl.origin);
+            }
+
+            const canCache = canHtmlCache(request, inUrl);
+            const edgeCache = await caches.open("render-html");
+            const cacheKey = new Request(request.url, request);
+
+            if (canCache) {
+                const hit = await edgeCache.match(cacheKey);
+
+                if (hit) {
+                    return hit;
+                }
+            }
+
+            const renderRes = await fetchRenderedHtml(targetUrl, env);
+            const body = await renderRes.text();
+
+            const headers = new Headers({
+                "content-type":
+                    renderRes.headers.get("content-type") ?? "text/html; charset=UTF-8",
+                "cache-control":
+                    canCache && renderRes.ok
+                        ? `public, s-maxage=${HTML_TTL}`
+                        : "no-store"
+            });
+
+            const finalUrl = renderRes.headers.get("x-render-final-url");
+            if (finalUrl) {
+                headers.set("x-render-final-url", finalUrl);
+            }
+
+            const res = new Response(body, {
+                status: renderRes.status,
+                headers
+            });
+
+            if (canCache && renderRes.ok) {
+                ctx.waitUntil(edgeCache.put(cacheKey, res.clone()));
+            }
+
+            return res;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            return new Response(`Worker failed: ${message}`, {
+                status: 500,
+                headers: {
+                    "content-type": "text/plain; charset=UTF-8",
+                    "cache-control": "no-store"
+                }
+            });
         }
-
-        const renderRes = await fetchRenderedHtml(targetUrl, env);
-        const body = await renderRes.text();
-
-        const headers = new Headers({
-            "content-type": "text/html; charset=UTF-8",
-            "cache-control": canCache
-                ? `public, s-maxage=${HTML_TTL}`
-                : "no-store"
-        });
-
-        const res = new Response(body, {
-            status: renderRes.status,
-            headers
-        });
-
-        if (canCache && renderRes.ok) {
-            ctx.waitUntil(edgeCache.put(cacheKey, res.clone()));
-        }
-
-        return res;
     }
 };

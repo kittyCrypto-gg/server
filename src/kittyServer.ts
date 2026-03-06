@@ -1013,14 +1013,17 @@ server.app.get("/img", async (req: Request, res: Response) => {
 });
 
 server.app.get("/render", async (req: Request, res: Response) => {
+    console.log(`Hit on /render from ${getClientIp(req)}`);
     const token = req.header("x-render-token")?.trim() || "";
 
     if (RENDER_TOKEN && token !== RENDER_TOKEN) {
         res.status(403).send("Forbidden");
+        console.warn(`Unauthorised render attempt with token: ${token}`);
         return;
     }
 
     const readString = (value: unknown): string => {
+        console.log(`Reading value:`, value);
         return typeof value === "string" ? value.trim() : "";
     };
 
@@ -1036,6 +1039,7 @@ server.app.get("/render", async (req: Request, res: Response) => {
 
     if (!url) {
         res.status(400).send("Missing url");
+        console.warn(`Bad /render request: missing url. Received token: ${token}`);
         return;
     }
 
@@ -1050,6 +1054,7 @@ server.app.get("/render", async (req: Request, res: Response) => {
                 allowedOrigins: ["https://kittycrypto.gg"]
             }
         );
+        console.log(`Render successful for ${url}, final URL: ${result.finalUrl}`);
 
         res.status(result.status);
         res.setHeader("Content-Type", "text/html; charset=UTF-8");
@@ -1059,6 +1064,7 @@ server.app.get("/render", async (req: Request, res: Response) => {
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         res.status(500).send(`Render failed: ${message}`);
+        console.warn(`Render failed for ${url}. Received token: ${token}. Error: ${message}`);
     }
 });
 
