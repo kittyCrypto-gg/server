@@ -22,6 +22,7 @@ export interface RenderConfig {
     deviceScaleFactor?: number;
   };
   launch?: Parameters<typeof puppeteer.launch>[0];
+  executablePath?: string;
 }
 
 type RenderState = {
@@ -67,21 +68,24 @@ function createBrowser(config: RenderConfig): Promise<Browser> {
     ...(launch.args ?? [])
   ];
 
-const launchBrowser = async (): Promise<Browser> => {
+  const executablePath = launch.executablePath ?? getExecutablePath(config);
+
+  const launchBrowser = async (): Promise<Browser> => {
     const browser = await puppeteer.launch({
-        headless: true,
-        ...launch,
-        args
+      headless: true,
+      ...launch,
+      executablePath,
+      args
     });
 
     browser.once("disconnected", () => {
-        browserPromise = null;
+      browserPromise = null;
     });
 
     return browser;
-};
+  };
 
-return launchBrowser();
+  return launchBrowser();
 }
 
 async function getBrowser(config: RenderConfig): Promise<Browser> {
@@ -358,6 +362,25 @@ export async function renderPage(
   }
 }
 
+function getExecutablePath(config: RenderConfig): string {
+  const fromConfig = config.executablePath?.trim();
+  if (fromConfig) {
+    return fromConfig;
+  }
+
+  const fromEnv =
+    process.env.CHROME_PATH?.trim() ||
+    process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
+
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  throw new Error(
+    "Missing Chrome executable path. Set CHROME_PATH or pass executablePath in render config."
+  );
+}
+
 export async function handleRenderRequest(
   request: Request,
   config: RenderConfig = {}
@@ -366,7 +389,13 @@ export async function handleRenderRequest(
     assertToken(request, config);
 
     const job = await readRenderJob(request);
-    const result = await renderPage(job, config);
+    const result = await renderPage(
+      job,
+      {
+        allowedOrigins: ["https://kittycrypto.gg"],
+        executablePath: process.env.CHROME_PATH
+      }
+    );
 
     return new Response(result.html, {
       status: result.status,
