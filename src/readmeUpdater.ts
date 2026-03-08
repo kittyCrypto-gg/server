@@ -73,6 +73,9 @@ export class versionTracker {
         this.commitMessage = options.commitMessage ?? '!skip chore: update README version token';
 
         const token = process.env.GITHUB_README_TOKEN ?? '';
+        // match * with the numner of chars shown in the token so if token is 6 chars show 6 *  and if token is 40 chars show 40 *
+        const tokenStars = token ? '*'.repeat(token.length) : '(none)';
+        console.log(`[versionTracker] Token for GitHub updates: ${token ? tokenStars : '(none)'}`);
         if (!token) {
             throw new Error(
                 '[ReadmeVersionPublisher] Missing GITHUB_README_TOKEN in environment. ' +
@@ -157,7 +160,7 @@ export class versionTracker {
         version: string
     ): { updated: string; changed: boolean; fromToken: string | null; toToken: string } {
         // Find first occurrence like ${V12} and replace ALL occurrences to ${V<version>}
-        const tokenRe = /\$\{V(\d+)\}/g;
+        const tokenRe = /\$\{V(\d+(?:\.\d+)?)\}/g;
 
         let firstFrom: string | null = null;
         const updated = original.replace(tokenRe, (m) => {
@@ -230,7 +233,10 @@ export class versionTracker {
 
             const replaced = this.replaceToken(readme.content, version);
             if (!replaced.changed) {
-                results.push({ kind: 'skipped', repo, reason: 'No ${V#} token found, or README already unchanged by replacement' });
+                const reason = replaced.fromToken
+                    ? `README already has ${replaced.toToken}, no update needed`
+                    : 'No version token found in README to replace';
+                results.push({ kind: 'skipped', repo, reason: reason });
                 continue;
             }
 

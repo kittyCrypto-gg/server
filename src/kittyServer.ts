@@ -6,7 +6,7 @@ import { CommentData } from "./kittyComment";
 import cors from "cors";
 import fs from "fs";
 import { Request, Response } from "express";
-import KittyRequest from "./kittyRequest";
+import { GithubAutoScheduler } from "./blogScheduler";
 import * as ImageTransformer from "./imageTransformer";
 import fetch from "node-fetch"
 import { tokenStore } from "./tokenStore";
@@ -65,6 +65,12 @@ if (!CHATBOT_API_KEY) {
     console.error("❌ CHATBOT_API_KEY not set")
     process.exit(1)
 }
+
+const blogger = new GithubAutoScheduler({
+    owner: "KittyCrypto-gg",
+    repos: ["server", "website"],
+    blogUser: "autoKitty"
+});
 
 // Initialise the HTTPS server
 const server = new Server(HOST, PORT, allowedOrigins);
