@@ -74,8 +74,8 @@ export class versionTracker {
 
         const token = process.env.GITHUB_README_TOKEN ?? '';
         // match * with the numner of chars shown in the token so if token is 6 chars show 6 *  and if token is 40 chars show 40 *
-        const tokenStars = token ? '*'.repeat(token.length) : '(none)';
-        console.log(`[versionTracker] Token for GitHub updates: ${token ? tokenStars : '(none)'}`);
+        //const tokenStars = token ? '*'.repeat(token.length) : '(none)';
+        //console.log(`[versionTracker] Token for GitHub updates: ${token ? tokenStars : '(none)'}`);
         if (!token) {
             throw new Error(
                 '[ReadmeVersionPublisher] Missing GITHUB_README_TOKEN in environment. ' +
