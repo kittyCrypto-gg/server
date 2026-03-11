@@ -6,7 +6,7 @@ import { OpenAI } from "openai";
 import fs from "fs";
 import path from "path";
 /* @ts-ignore */
-import "dotenv/config"
+import "dotenv/config";
 
 const apiKey = process.env.OPENAI_KEY || "";
 const openai = new OpenAI({ apiKey });
@@ -14,6 +14,24 @@ const openai = new OpenAI({ apiKey });
 interface ModeratorStrings {
   role?: string;
   user?: string;
+}
+
+function isValidURL(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveLocation(value: unknown): string {
+  if (typeof value !== "string") {
+    return "world";
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? "world" : trimmed;
 }
 
 export interface CommentData {
@@ -24,6 +42,8 @@ export interface CommentData {
   sessionToken: string;
   timestamp: string;
   id: string;
+  website?: string;
+  location?: string;
 }
 
 class Comment extends KittyRequest<CommentData> {
@@ -34,9 +54,8 @@ class Comment extends KittyRequest<CommentData> {
   constructor(server: Server, commentsPath: string, TokenStore: tokenStore) {
     super(server, commentsPath, TokenStore, Comment.isValidComment);
     this.stringsFilePath = path.resolve(process.cwd(), "data", "strings.json");
-    
-    try {
 
+    try {
       this.strings = JSON.parse(fs.readFileSync(this.stringsFilePath, "utf-8"));
     } catch {
       console.warn("⚠️ Could not load strings.json for moderator.");
@@ -45,7 +64,6 @@ class Comment extends KittyRequest<CommentData> {
     }
 
     try {
-      // ✅ Register the POST /comment endpoint directly here
       this.server.app.post("/comment", async (req: Request, res: Response) => {
         await this.handleRequest(req, res, () => this.storeComment(req, res));
       });
@@ -63,13 +81,15 @@ class Comment extends KittyRequest<CommentData> {
         messages: [
           {
             role: "system",
-            content: this.strings.moderator?.role || "You are a moderator. Please moderate the following message:",
+            content:
+              this.strings.moderator?.role ||
+              "You are a moderator. Please moderate the following message:"
           },
           {
             role: "user",
-            content: `The user submitted the following comment:\n\n${rawMsg}`,
-          },
-        ],
+            content: `The user submitted the following comment:\n\n${rawMsg}`
+          }
+        ]
       });
 
       return response.choices[0].message.content ?? "Error moderating comment.";
@@ -80,10 +100,14 @@ class Comment extends KittyRequest<CommentData> {
   }
 
   private async storeComment(req: Request, res: Response): Promise<object> {
-    const body = req.body;
+    const body: unknown = req.body;
 
     if (!Comment.isValidComment(body)) {
       return { error: "Invalid comment format." };
+    }
+
+    if (body.website !== undefined && !isValidURL(body.website)) {
+      return { error: "Invalid website URL." };
     }
 
     if (!this.sessionTokens.has(body.sessionToken)) {
@@ -91,6 +115,11 @@ class Comment extends KittyRequest<CommentData> {
     }
 
     body.page = decodeURIComponent(body.page);
+    body.location =
+      typeof body.location === "string" && body.location.trim().length > 0
+        ? body.location
+        : "world";
+
     const safeMsg = await this.moderateComment(body.msg);
 
     if (safeMsg === "ERROR") {
@@ -109,23 +138,22 @@ class Comment extends KittyRequest<CommentData> {
   }
 
   static isValidComment(data: unknown): data is CommentData {
+    if (typeof data !== "object" || data === null) {
+      return false;
+    }
+
+    const comment = data as CommentData;
+
     return (
-      typeof data === "object" &&
-      data !== null &&
-      "page" in data &&
-      "nick" in data &&
-      "msg" in data &&
-      "ip" in data &&
-      "sessionToken" in data &&
-      "timestamp" in data &&
-      "id" in data &&
-      typeof (data as CommentData).page === "string" &&
-      typeof (data as CommentData).nick === "string" &&
-      typeof (data as CommentData).msg === "string" &&
-      typeof (data as CommentData).ip === "string" &&
-      typeof (data as CommentData).sessionToken === "string" &&
-      typeof (data as CommentData).timestamp === "string" &&
-      typeof (data as CommentData).id === "string"
+      typeof comment.page === "string" &&
+      typeof comment.nick === "string" &&
+      typeof comment.msg === "string" &&
+      typeof comment.ip === "string" &&
+      typeof comment.sessionToken === "string" &&
+      typeof comment.timestamp === "string" &&
+      typeof comment.id === "string" &&
+      (comment.website === undefined || typeof comment.website === "string") &&
+      (comment.location === undefined || typeof comment.location === "string")
     );
   }
 }
