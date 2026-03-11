@@ -1,12 +1,25 @@
+import * as ImageTransformer from "./imageTransformer";
+import { Request, Response } from "express";
+import Server from "./baseServer";
+import * as types from "./types";
+import Chat from "./kittyChat";
+import fetch from "node-fetch";
+import crypto from "crypto";
 import path from "path";
 import fs from "fs";
-import { Request, Response } from "express";
-import * as ImageTransformer from "./imageTransformer";
-import fetch from "node-fetch"
-import * as types from "./types"
-import crypto from "crypto";
-import Server from "./baseServer";
-import Chat from "./kittyChat";
+
+type ChatbotUser = {
+    username: string;
+    hash: string;
+};
+
+type ChatbotDoc = {
+    version: number;
+    updatedAt: string;
+    users: ChatbotUser[];
+};
+
+type NodeErrorWithCode = Error & { code?: string };
 
 export function parseImgQuery(req: Request): types.ImgQueryParseResult {
     const src = readTrimmedQueryString(req, "src");
@@ -106,145 +119,118 @@ export function sendImgError(res: Response, err: unknown): void {
     res.status(500).send(message);
 }
 
+function createInitialChatbotDoc(): ChatbotDoc {
+    return {
+        version: 0,
+        updatedAt: new Date().toISOString(),
+        users: [],
+    };
+}
+
+function normaliseChatbotDoc(value: unknown): ChatbotDoc {
+    if (typeof value !== "object" || value === null) {
+        return createInitialChatbotDoc();
+    }
+
+    const raw = value as Partial<ChatbotDoc>;
+    const users = Array.isArray(raw.users)
+        ? raw.users.filter((entry: unknown): entry is ChatbotUser => {
+            return (
+                typeof entry === "object" &&
+                entry !== null &&
+                typeof (entry as ChatbotUser).username === "string" &&
+                typeof (entry as ChatbotUser).hash === "string"
+            );
+        })
+        : [];
+
+    return {
+        version: typeof raw.version === "number" ? raw.version : 0,
+        updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
+        users,
+    };
+}
+
 export async function updateUsersFile(
-    mutate: (doc: any) => void,
+    mutate: (doc: ChatbotDoc) => void,
     retries = 5
 ): Promise<void> {
+    const targetPath = process.env.CHATBOT_PATH || "";
+
+    if (!targetPath) {
+        throw new Error("CHATBOT_PATH is not configured");
+    }
+
     for (let i = 0; i < retries; i++) {
-        let doc: any
+        let doc: ChatbotDoc;
 
         try {
-            const raw = await fs.promises.readFile(process.env.CHATBOT_PATH || "", "utf8");
+            const raw = await fs.promises.readFile(targetPath, "utf8");
 
             if (!raw.trim()) {
-                throw new Error("Empty users file")
+                throw new Error("Empty users file");
             }
 
-            doc = JSON.parse(raw)
+            doc = normaliseChatbotDoc(JSON.parse(raw) as unknown);
         } catch {
-            console.warn("Users file missing, empty, or invalid, initialising new store")
-
-            doc = {
-                version: 0,
-                updatedAt: new Date().toISOString(),
-                users: []
-            }
+            console.warn("Users file missing, empty, or invalid, initialising new store");
+            doc = createInitialChatbotDoc();
         }
 
-        const baseVersion =
-            typeof doc.version === "number" ? doc.version : 0
+        const baseVersion = doc.version;
 
-        mutate(doc)
+        mutate(doc);
 
-        doc.version = baseVersion + 1
-        doc.updatedAt = new Date().toISOString()
+        doc.version = baseVersion + 1;
+        doc.updatedAt = new Date().toISOString();
 
-        const tmp = `${process.env.CHATBOT_PATH}.${process.pid}.${Date.now()}.tmp`;
+        const tmp = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
 
         await fs.promises.writeFile(
             tmp,
             JSON.stringify(doc, null, 2),
             "utf8"
-        )
+        );
 
         try {
-            await fs.promises.rename(tmp, process.env.CHATBOT_PATH || "")
-            return
+            await fs.promises.rename(tmp, targetPath);
+            return;
         } catch {
-            await fs.promises.unlink(tmp).catch(() => { })
+            await fs.promises.unlink(tmp).catch(() => { });
         }
     }
 
-    throw new Error("Failed to commit user file after multiple retries")
+    throw new Error("Failed to commit user file after multiple retries");
 }
 
-export function registerPage(error = "", apiKey = "") {
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Register User</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-        <style>
-        body {
-          background: #0f172a;
-          color: #e5e7eb;
-          font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          height: 100vh;
-          margin: 0;
-        }
-        .card {
-          background: #020617;
-          padding: 2rem;
-          border-radius: 12px;
-          width: 100%;
-          max-width: 360px;
-          box-shadow: 0 0 40px rgba(0,0,0,.7);
-        }
-        .card input,
-        .card button {
-          box-sizing: border-box;
-        }
-        h1 {
-          text-align: center;
-          margin-bottom: 1rem;
-        }
-        input {
-          width: 100%;
-          padding: 14px;
-          margin-top: 10px;
-          border-radius: 6px;
-          border: none;
-          background: #020617;
-          color: white;
-          font-size: 16px;
-        }
-        button {
-          width: 100%;
-          margin-top: 20px;
-          padding: 14px;
-          background: #16a34a;
-          border: none;
-          border-radius: 6px;
-          color: white;
-          font-weight: bold;
-          font-size: 16px;
-        }
-        .error {
-          color: #f87171;
-          text-align: center;
-          margin-top: 12px;
-        }
-        </style>
-      </head>
-      <body>
-        <form class="card" method="POST">
-          <!-- Hidden relay field -->
-          <input type="hidden" name="apiKey" value="${apiKey}">
-  
-          <h1>Register</h1>
-          <input name="username" placeholder="Username" required />
-          <input name="password" type="password" placeholder="Password" required />
-          <button type="submit">Create User</button>
-  
-          <div style="margin-top: 10px; font-size: 13px; color: #94a3b8;">
-            API key seen by server:
-            <code style="display: block; margin-top: 6px; padding: 8px; background: #0f172a; border-radius: 6px; word-break: break-all;">
-              ${apiKey || "(empty)"}
-            </code>
-          </div>
-  
-          ${error ? `<div class="error">${error}</div>` : ""}
-        </form>
-      </body>
-      </html>
-    `;
+export function registerPage(error = "", apiKey = ""): string {
+    const registerTemplate = fs.readFileSync(
+        path.resolve(__dirname, "../ui/register.html"),
+        "utf-8"
+    );
+
+    const escapeHtml = (value: string): string => {
+        return value
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+    };
+
+    const safeApiKey = escapeHtml(apiKey);
+    const safeError = escapeHtml(error);
+
+    return registerTemplate
+        .replace("{{API_KEY_ATTR}}", safeApiKey)
+        .replace("{{API_KEY_DISPLAY}}", safeApiKey || "(empty)")
+        .replace(
+            "{{ERROR_BLOCK}}",
+            safeError ? `<div class="error">${safeError}</div>` : ""
+        );
 }
 
-export async function getChapters(storyPath: string): Promise<{ chapters: number[], urls: string[] }> {
+export async function getChapters(storyPath: string): Promise<{ chapters: number[]; urls: string[] }> {
     const chapters: number[] = [];
     const urls: string[] = [];
     const BASE = "https://kittycrypto.gg";
@@ -257,7 +243,7 @@ export async function getChapters(storyPath: string): Promise<{ chapters: number
             chapters.push(0);
             urls.push(url0);
         }
-    } catch { /* No chapter 0; do nothing */ }
+    } catch { }
 
     let i = 1;
     while (true) {
@@ -293,7 +279,7 @@ export async function getHtmlPagesFromGithub(repoOwner: string, repoName: string
     for (const item of items) {
         if (item.type === "file" && item.name.endsWith(".html")) {
             const pagePath = dir ? `${dir}/${item.name}` : item.name;
-            urls.push(`https://kittycrypto.gg/${pagePath.replace(/^index\.html$/, "")}`); // root index.html = /
+            urls.push(`https://kittycrypto.gg/${pagePath.replace(/^index\.html$/, "")}`);
         } else if (item.type === "dir") {
             urls.push(...await getHtmlPagesFromGithub(repoOwner, repoName, item.path));
         }
@@ -321,14 +307,16 @@ export function getClientIp(req: Request): string {
 }
 
 export function originAllowsDecrypted(origin: string | undefined, server: Server): boolean {
-    if (!origin) return false;      // your rule: no Origin => encrypted
+    if (!origin) return false;
     if (origin === "null") return false;
     return server.allowedOriginsList.includes(origin);
 }
 
-export function notifyClients(chat: Chat, clients: types.SseClient[]) {
-    const decrypted = chat.loadAndDecryptChat();
-    const encrypted = chat.loadEncryptedChat();
+export async function notifyClients(chat: Chat, clients: types.SseClient[]): Promise<void> {
+    const [decrypted, encrypted] = await Promise.all([
+        chat.loadAndDecryptChat(),
+        chat.loadEncryptedChat(),
+    ]);
 
     for (const c of clients) {
         const payload = c.hasKey ? decrypted : encrypted;
@@ -336,22 +324,52 @@ export function notifyClients(chat: Chat, clients: types.SseClient[]) {
     }
 }
 
-export async function trackChatChanges(chat_json_path: string, chat: Chat, clients: types.SseClient[]) {
-    let lastChatData = await fs.promises.readFile(chat_json_path, "utf-8");
-    console.log(`📔 Tracking chat changes in ${chat_json_path}`);
-    setInterval(async () => {
-        const newChatData = await fs.promises.readFile(chat_json_path, "utf-8");
-        if (newChatData !== lastChatData) {
-            chat.clearMessageCache();
-            lastChatData = newChatData;
-            console.log("🔄 Chat data updated. Notifying clients...");
-            notifyClients(chat, clients);
+async function readFileOrEmpty(filePath: string): Promise<string> {
+    try {
+        return await fs.promises.readFile(filePath, "utf-8");
+    } catch (error: unknown) {
+        const code = (error as NodeErrorWithCode).code;
+        if (code === "ENOENT") {
+            return "";
         }
+
+        throw error;
+    }
+}
+
+export async function trackChatChanges(chat_json_path: string, chat: Chat, clients: types.SseClient[]): Promise<void> {
+    let lastChatData = await readFileOrEmpty(chat_json_path);
+    let busy = false;
+
+    console.log(`📔 Tracking chat changes in ${chat_json_path}`);
+
+    setInterval(() => {
+        if (busy) {
+            return;
+        }
+
+        busy = true;
+
+        void (async () => {
+            try {
+                const newChatData = await readFileOrEmpty(chat_json_path);
+
+                if (newChatData !== lastChatData) {
+                    chat.clearMessageCache();
+                    lastChatData = newChatData;
+                    console.log("🔄 Chat data updated. Notifying clients...");
+                    await notifyClients(chat, clients);
+                }
+            } catch (error) {
+                console.error("❌ Error tracking chat changes:", error);
+            } finally {
+                busy = false;
+            }
+        })();
     }, 1000);
 }
 
 export async function resolveStoryPath(rest: string, storiesRoot: string): Promise<string | null> {
-
     let cleaned: string;
     try {
         cleaned = decodeURIComponent(rest);
@@ -392,16 +410,15 @@ export async function resolveStoryPath(rest: string, storiesRoot: string): Promi
 }
 
 export async function exploreStories(storiesRoot: string): Promise<types.StoriesIndex> {
-
     const out: types.StoriesIndex = {};
 
     const isStoryDirName = (name: string): boolean => {
         return /^[a-zA-Z0-9 _-]+$/.test(name);
-    }
+    };
 
     const isChapterXml = (name: string): boolean => {
         return /^chapt\d+\.xml$/i.test(name);
-    }
+    };
 
     const entries = await fs.promises.readdir(storiesRoot, { withFileTypes: true });
     const storyDirs = entries.filter((e) => e.isDirectory() && isStoryDirName(e.name));

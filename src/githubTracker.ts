@@ -1,7 +1,7 @@
-import fetch from 'node-fetch';
 import { writeFile, mkdir, access, constants, readdir, readFile } from 'fs/promises';
-import path from 'path';
 import { OpenAI } from "openai";
+import fetch from 'node-fetch';
+import path from 'path';
 /* @ts-ignore */
 import 'dotenv/config';
 

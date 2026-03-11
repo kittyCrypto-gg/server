@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Register User</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <style>
+        body {
+            background: #0f172a;
+            color: #e5e7eb;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .card {
+            background: #020617;
+            padding: 2rem;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 360px;
+            box-shadow: 0 0 40px rgba(0, 0, 0, .7);
+        }
+
+        .card input,
+        .card button {
+            box-sizing: border-box;
+        }
+
+        h1 {
+            text-align: centre;
+            margin-bottom: 1rem;
+        }
+
+        input {
+            width: 100%;
+            padding: 14px;
+            margin-top: 10px;
+            border-radius: 6px;
+            border: none;
+            background: #020617;
+            color: white;
+            font-size: 16px;
+        }
+
+        button {
+            width: 100%;
+            margin-top: 20px;
+            padding: 14px;
+            background: #16a34a;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        .error {
+            color: #f87171;
+            text-align: centre;
+            margin-top: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <form class="card" method="POST">
+        <input type="hidden" name="apiKey" value="{{API_KEY_ATTR}}">
+
+        <h1>Register</h1>
+        <input name="username" placeholder="Username" required />
+        <input name="password" type="password" placeholder="Password" required />
+        <button type="submit">Create User</button>
+
+        <div style="margin-top: 10px; font-size: 13px; color: #94a3b8;">
+            API key seen by server:
+            <code
+                style="display: block; margin-top: 6px; padding: 8px; background: #0f172a; border-radius: 6px; word-break: break-all;">
+        {{API_KEY_DISPLAY}}
+      </code>
+        </div>
+
+        {{ERROR_BLOCK}}
+    </form>
+</body>
+
+</html>

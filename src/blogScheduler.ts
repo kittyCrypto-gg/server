@@ -1,11 +1,11 @@
-import { GirhubTracker } from "./githubTracker";
 import { autoBlogger, ModeratorStrings } from "./autoBlogger";
 import { versionTracker } from "./readmeUpdater";
-import { OpenAI } from "openai";
+import { GirhubTracker } from "./githubTracker";
 import { readFileSync } from "fs";
+import { OpenAI } from "openai";
 import path from "path";
 /* @ts-ignore */
-import "dotenv/config"
+import "dotenv/config";
 
 const apiKey = process.env.OPENAI_KEY || "";
 const openai = new OpenAI({ apiKey });

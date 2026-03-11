@@ -1,18 +1,18 @@
 import puppeteer, { Browser, Page } from "puppeteer-core";
 
-export interface RenderJob {
+interface RenderJob {
   url: string;
   waitForSelector?: string;
 }
 
-export interface RenderResult {
+interface RenderResult {
   status: number;
   finalUrl: string;
   html: string;
   contentType: string | null;
 }
 
-export interface RenderConfig {
+interface RenderConfig {
   token?: string;
   allowedOrigins?: string[];
   timeoutMs?: number;

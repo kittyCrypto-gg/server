@@ -1,5 +1,5 @@
-import * as path from 'path'
 import { MutexJsonStore } from './mutexJsonStore'
+import * as path from 'path'
 
 type IsoTimestamp = string
 

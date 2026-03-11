@@ -1,12 +1,12 @@
-import https from "https";
-import fs from "fs";
 import express, { Request, Response, Express } from "express";
 import bodyParser from "body-parser";
-import net from "net";
-import cors from "cors";
 import process from "process";
+import https from "https";
+import cors from "cors";
+import net from "net";
+import fs from "fs";
 /* @ts-ignore */
-import "dotenv/config"
+import "dotenv/config";
 
 type methods = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'OPTIONS';
 
@@ -139,7 +139,7 @@ class Server {
         console.log(
           `Endpoint: https://${this.host}:${this.port}${middleware.route.path}, Method: ${Object.keys(middleware.route.methods).join(", ").toUpperCase()}`
         );
-      } else if (middleware.name === "router" && Array.isArray(middleware.handle?.stack)) {
+      } else if (middleware.name === "router" && middleware.handle && Array.isArray(middleware.handle.stack)) {
         middleware.handle.stack.forEach((handler: Middleware) => {
           if (handler.route) {
             console.log(

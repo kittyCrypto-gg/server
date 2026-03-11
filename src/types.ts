@@ -1,5 +1,5 @@
-import { Request, Response } from "express";
 import * as ImageTransformer from "./imageTransformer";
+import { Response } from "express";
 
 export type GithubContentItem = {
     type: "file" | "dir";

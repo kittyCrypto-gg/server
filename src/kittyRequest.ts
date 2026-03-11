@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
-import fs from "fs";
 import Server from "./baseServer";
 import { tokenStore } from "./tokenStore";
+import { MutexJsonStore } from "./mutexJsonStore";
 
 type TokenLocator = (req: Request) => string | null;
 
@@ -13,9 +13,9 @@ type HandleRequestOpts = {
 
 class KittyRequest<T extends object> {
     protected server: Server;
-    protected readonly jsonFilePath: string;
     protected validateRequest: (data: unknown) => data is T;
     protected TokenStore: tokenStore;
+    private readonly jsonStore: MutexJsonStore<T[]>;
 
     public constructor(
         server: Server,
@@ -24,11 +24,14 @@ class KittyRequest<T extends object> {
         validateRequest: (data: unknown) => data is T
     ) {
         this.server = server;
-        this.jsonFilePath = jsonFilePath;
         this.TokenStore = TokenStore;
         this.validateRequest = validateRequest;
+        this.jsonStore = new MutexJsonStore<T[]>({
+            filePath: jsonFilePath,
+            initialValue: (): T[] => [],
+        });
     }
-    
+
     protected async handleRequest(
         req: Request,
         res: Response,
@@ -54,7 +57,9 @@ class KittyRequest<T extends object> {
         const store = this.TokenStore;
 
         if (requireSessionToken) {
-            if (!store) return res.status(500).json({ error: "Token store not configured." });
+            if (!store) {
+                return res.status(500).json({ error: "Token store not configured." });
+            }
 
             try {
                 await store.waitUntilReady();
@@ -72,7 +77,9 @@ class KittyRequest<T extends object> {
                 return res.status(403).json({ error: "Session expired." });
             }
 
-            if (touchOnValid) store.touchToken(token);
+            if (touchOnValid) {
+                store.touchToken(token);
+            }
         }
 
         try {
@@ -101,6 +108,7 @@ class KittyRequest<T extends object> {
                 if (error.message.includes("Invalid request format")) {
                     return res.status(400).json({ error: error.message });
                 }
+
                 if (error.message.includes("Missing")) {
                     return res.status(422).json({ error: error.message });
                 }
@@ -110,28 +118,81 @@ class KittyRequest<T extends object> {
         }
     }
 
-    protected saveToFile(data: T): void {
-        let fileData: T[] = [];
+    protected async readFileData(): Promise<T[]> {
+        const stored = await this.jsonStore.read();
+        const { data, wasSanitised } = this.sanitiseStoredData(stored as unknown);
 
-        if (fs.existsSync(this.jsonFilePath)) {
-            try {
-                const existingData = fs.readFileSync(this.jsonFilePath, "utf-8");
-                fileData = JSON.parse(existingData);
-                if (!Array.isArray(fileData)) {
-                    throw new Error("Invalid JSON format: Expected an array");
-                }
-            } catch {
-                console.warn(`Error reading/parsing ${this.jsonFilePath}. Resetting file.`);
-                fileData = [];
-            }
+        if (wasSanitised) {
+            console.warn("⚠️ Invalid JSON store contents detected. Resetting stored data.");
+            await this.replaceFileData(data);
         }
 
-        fileData.push(data);
-        fs.writeFileSync(this.jsonFilePath, JSON.stringify(fileData, null, 2), "utf-8");
+        return data;
+    }
+
+    protected async replaceFileData(data: T[]): Promise<void> {
+        if (!this.isValidStoredData(data)) {
+            throw new Error("Invalid file data. Expected an array of valid entries.");
+        }
+
+        await this.jsonStore.update(async (): Promise<T[]> => {
+            return data;
+        });
+    }
+
+    protected async updateFileData(
+        update: (current: T[]) => T[] | Promise<T[]>
+    ): Promise<T[]> {
+        return await this.jsonStore.update(async (current: T[]): Promise<T[]> => {
+            const { data: sanitisedCurrent, wasSanitised } = this.sanitiseStoredData(
+                current as unknown
+            );
+
+            if (wasSanitised) {
+                console.warn("⚠️ Invalid JSON store contents detected. Rebuilding stored data.");
+            }
+
+            const next = await update(sanitisedCurrent);
+
+            if (!this.isValidStoredData(next)) {
+                throw new Error("Invalid file data returned from update.");
+            }
+
+            return next;
+        });
+    }
+
+    protected async saveToFile(data: T): Promise<void> {
+        if (!this.validateRequest(data)) {
+            throw new Error("Invalid entry. Refusing to persist malformed data.");
+        }
+
+        await this.updateFileData(async (current: T[]): Promise<T[]> => {
+            return [...current, data];
+        });
+    }
+
+    private sanitiseStoredData(data: unknown): { data: T[]; wasSanitised: boolean } {
+        if (!Array.isArray(data)) {
+            return { data: [], wasSanitised: true };
+        }
+
+        const validEntries = data.filter((entry: unknown): entry is T => {
+            return this.validateRequest(entry);
+        });
+
+        return {
+            data: validEntries,
+            wasSanitised: validEntries.length !== data.length,
+        };
+    }
+
+    private isValidStoredData(data: unknown): data is T[] {
+        return Array.isArray(data) && data.every((entry: unknown) => this.validateRequest(entry));
     }
 
     public get sessionTokens(): Set<string> {
-        return this.TokenStore ? this.TokenStore['sessionTokens'] : new Set<string>();
+        return this.TokenStore ? this.TokenStore["sessionTokens"] : new Set<string>();
     }
 }
 

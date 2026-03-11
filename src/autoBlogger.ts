@@ -1,4 +1,4 @@
-import { readdir, readFile, mkdir, writeFile, access, constants } from 'fs/promises';
+import * as fs from 'fs/promises';
 import path from 'path';
 import { OpenAI } from "openai";
 
@@ -141,22 +141,22 @@ export class autoBlogger {
 
   private async ensureDir(dir: string): Promise<void> {
     try {
-      await access(dir, constants.F_OK);
+      await fs.access(dir, fs.constants.F_OK);
     } catch {
-      await mkdir(dir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true });
     }
   }
 
   private async getLatestJson(): Promise<{ file: string, json: CommitLog } | null> {
     const pattern = new RegExp(`-GithubTracker-${this.owner}-${this.repo}\\.json$`);
-    const files = await readdir(this.commitsDir);
+    const files = await fs.readdir(this.commitsDir);
     const matches = files.filter(f => pattern.test(f));
 
     if (!matches.length) return null;
 
     matches.sort();
     const latest = matches[matches.length - 1];
-    const content = await readFile(path.join(this.commitsDir, latest), 'utf-8');
+    const content = await fs.readFile(path.join(this.commitsDir, latest), 'utf-8');
     return { file: latest, json: JSON.parse(content) as CommitLog };
   }
 
@@ -489,7 +489,7 @@ export class autoBlogger {
       ? targetPaths
         .map(p => (path.isAbsolute(p) ? p : path.join(this.postsDir, p)))
         .sort()
-      : (await readdir(this.postsDir))
+      : (await fs.readdir(this.postsDir))
         .filter(f => f.endsWith('.md'))
         .sort()
         .map(f => path.join(this.postsDir, f));
@@ -499,7 +499,7 @@ export class autoBlogger {
 
       let raw = "";
       try {
-        raw = await readFile(fullPath, "utf-8");
+        raw = await fs.readFile(fullPath, "utf-8");
       } catch {
         console.warn(`[autoBlogger][spellcheck][${this.repo}] Failed to read ${fullPath}`);
         continue;
@@ -516,7 +516,7 @@ export class autoBlogger {
         continue;
       }
 
-      await writeFile(fullPath, patched, "utf-8");
+      await fs.writeFile(fullPath, patched, "utf-8");
 
       console.log(`[autoBlogger][spellcheck][${this.repo}] Updated ${fileName} (${changes.length} line(s) changed).`);
 
@@ -620,11 +620,11 @@ export class autoBlogger {
       const fileName = `autoBlogger-commits-${y}${m}${d}-${hh}:${mm}-${user}-${this.repo}.md`;
       const filePath = path.join(this.postsDir, fileName);
 
-      await writeFile(filePath, merged, 'utf-8');
+      await fs.writeFile(filePath, merged, 'utf-8');
       outPaths.push(filePath);
 
       latest.json.blogged = true;
-      await writeFile(path.join(this.commitsDir, latest.file), JSON.stringify(latest.json, null, 2), 'utf-8');
+      await fs.writeFile(path.join(this.commitsDir, latest.file), JSON.stringify(latest.json, null, 2), 'utf-8');
 
       return outPaths;
     } finally {
@@ -640,7 +640,7 @@ export class autoBlogger {
 
     try {
       const pattern = new RegExp(`-GithubTracker-${this.owner}-${this.repo}\\.json$`);
-      const files = (await readdir(this.commitsDir))
+      const files = (await fs.readdir(this.commitsDir))
         .filter(f => pattern.test(f))
         .sort();
 
@@ -651,7 +651,7 @@ export class autoBlogger {
 
       for (const file of files) {
         const fullPath = path.join(this.commitsDir, file);
-        const raw = await readFile(fullPath, "utf-8");
+        const raw = await fs.readFile(fullPath, "utf-8");
 
         let json: CommitLog;
         try {
@@ -736,10 +736,10 @@ export class autoBlogger {
         const fileName = `autoBlogger-commits-${stamp}-${user}-${this.repo}.md`;
         const postPath = path.join(this.postsDir, fileName);
 
-        await writeFile(postPath, merged, "utf-8");
+        await fs.writeFile(postPath, merged, "utf-8");
 
         json.blogged = true;
-        await writeFile(fullPath, JSON.stringify(json, null, 2), "utf-8");
+        await fs.writeFile(fullPath, JSON.stringify(json, null, 2), "utf-8");
 
         outPaths.push(postPath);
       }

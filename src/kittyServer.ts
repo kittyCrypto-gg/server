@@ -1,22 +1,20 @@
-import path from "path";
+import * as ImageTransformer from "./imageTransformer";
+import Comment, { CommentData } from "./kittyComment";
+import { GithubAutoScheduler } from "./blogScheduler";
+import express, { Request, Response } from "express";
+import * as helpers from "./serverHelpers";
+import { tokenStore } from "./tokenStore";
+import { renderPage } from "./render";
 import Server from "./baseServer";
+import * as types from "./types";
+import fetch from "node-fetch";
 import Chat from "./kittyChat";
-import Comment from "./kittyComment";
-import { CommentData } from "./kittyComment";
+import argon2 from "argon2";
+import path from "path";
 import cors from "cors";
 import fs from "fs";
-import { Request, Response } from "express";
-import { GithubAutoScheduler } from "./blogScheduler";
-import * as ImageTransformer from "./imageTransformer";
-import fetch from "node-fetch"
-import { tokenStore } from "./tokenStore";
-import argon2 from "argon2"
-import express from "express"
-import { renderPage } from "./render";
-import * as types from "./types";
-import * as helpers from "./serverHelpers";
 /* @ts-ignore */
-import "dotenv/config"
+import "dotenv/config";
 
 const HOST = process.env.HOST;
 const PORT = parseInt(process.env.PORT || "0");
@@ -160,7 +158,6 @@ server.app.get("/get-ip/sha256", cors({ origin: "*" }), (req: Request, res: Resp
 
 // Endpoint: SSE Stream for Chat Updates
 server.app.get("/chat/stream", async (req: Request, res: Response) => {
-
     try {
         await TokenStore.waitUntilReady();
     } catch {
@@ -187,13 +184,16 @@ server.app.get("/chat/stream", async (req: Request, res: Response) => {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders();
 
-    const initial = wantsDecrypted ? chat.loadAndDecryptChat() : chat.loadEncryptedChat();
+    const initial = wantsDecrypted
+        ? await chat.loadAndDecryptChat()
+        : await chat.loadEncryptedChat();
+
     res.write(`data: ${JSON.stringify(initial)}\n\n`);
 
     clients.push({ res, hasKey: wantsDecrypted });
 
     req.on("close", () => {
-        const idx = clients.findIndex(c => c.res === res);
+        const idx = clients.findIndex((c) => c.res === res);
         if (idx !== -1) clients.splice(idx, 1);
     });
 });
@@ -238,7 +238,9 @@ server.app.get("/comments/load", (req: Request, res: Response) => {
 });
 
 // Modify Chat to Call `notifyClients()` When New Messages Arrive
-chat.onNewMessage = () => helpers.notifyClients(chat, clients);
+chat.onNewMessage = async () => {
+    await helpers.notifyClients(chat, clients);
+};
 
 server.app.get('/robots.txt', (req, res) => { // Serve robots.txt
     res.type('text/plain');
@@ -565,7 +567,9 @@ server.app.get("/status", (_req: Request, res: Response) => {
 });
 
 server.start();
-helpers.trackChatChanges(chat_json_path, chat, clients);
+void helpers.trackChatChanges(chat_json_path, chat, clients).catch((error: unknown) => {
+    console.error("❌ Failed to start chat tracking:", error);
+});
 
 console.log(chat.readyMessage());
 console.log(comment.readyMessage());

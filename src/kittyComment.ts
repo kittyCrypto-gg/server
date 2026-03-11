@@ -1,10 +1,10 @@
 import { Request, Response } from "express";
-import Server from "./baseServer";
 import KittyRequest from "./kittyRequest";
 import { tokenStore } from "./tokenStore";
+import Server from "./baseServer";
 import { OpenAI } from "openai";
-import fs from "fs";
 import path from "path";
+import fs from "fs";
 /* @ts-ignore */
 import "dotenv/config";
 
@@ -25,15 +25,6 @@ function isValidURL(value: string): boolean {
   }
 }
 
-function resolveLocation(value: unknown): string {
-  if (typeof value !== "string") {
-    return "world";
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? "world" : trimmed;
-}
-
 export interface CommentData {
   page: string;
   nick: string;
@@ -51,12 +42,12 @@ class Comment extends KittyRequest<CommentData> {
   private ready: boolean = false;
   private readonly stringsFilePath: string;
 
-  constructor(server: Server, commentsPath: string, TokenStore: tokenStore) {
+  public constructor(server: Server, commentsPath: string, TokenStore: tokenStore) {
     super(server, commentsPath, TokenStore, Comment.isValidComment);
     this.stringsFilePath = path.resolve(process.cwd(), "data", "strings.json");
 
     try {
-      this.strings = JSON.parse(fs.readFileSync(this.stringsFilePath, "utf-8"));
+      this.strings = this.loadModeratorStrings();
     } catch {
       console.warn("⚠️ Could not load strings.json for moderator.");
       this.ready = false;
@@ -67,10 +58,26 @@ class Comment extends KittyRequest<CommentData> {
       this.server.app.post("/comment", async (req: Request, res: Response) => {
         await this.handleRequest(req, res, () => this.storeComment(req, res));
       });
+
       this.ready = true;
     } catch (error) {
       console.error("❌ Failed to register /comment endpoint:", error);
       this.ready = false;
+    }
+  }
+
+  private loadModeratorStrings(): { [key: string]: ModeratorStrings } {
+    try {
+      const raw = fs.readFileSync(this.stringsFilePath, "utf-8");
+      const parsed = JSON.parse(raw) as unknown;
+
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return {};
+      }
+
+      return parsed as { [key: string]: ModeratorStrings };
+    } catch {
+      throw new Error("Could not load moderator strings.");
     }
   }
 
@@ -114,21 +121,25 @@ class Comment extends KittyRequest<CommentData> {
       return { error: "Invalid session token." };
     }
 
-    body.page = decodeURIComponent(body.page);
-    body.location =
-      typeof body.location === "string" && body.location.trim().length > 0
-        ? body.location
-        : "world";
+    const comment: CommentData = {
+      ...body,
+      page: decodeURIComponent(body.page),
+      location:
+        typeof body.location === "string" && body.location.trim().length > 0
+          ? body.location
+          : "world"
+    };
 
-    const safeMsg = await this.moderateComment(body.msg);
+    const safeMsg = await this.moderateComment(comment.msg);
 
     if (safeMsg === "ERROR") {
       return { error: "AI moderation failed. Please try again later." };
     }
 
-    body.msg = safeMsg;
-    this.saveToFile(body);
-    return { success: true, received: body.id };
+    comment.msg = safeMsg;
+    await this.saveToFile(comment);
+
+    return { success: true, received: comment.id };
   }
 
   public readyMessage(): string {

@@ -1,21 +1,20 @@
 import { decode as decodePng, encode as encodePng } from "@cf-wasm/png";
-/* @ts-ignore */
-import { Resvg } from "@cf-wasm/resvg/node";
 import { decode as decodeJpeg, encode as encodeJpeg } from "@jsquash/jpeg";
-import resizeRgba from "@jsquash/resize";
-import { GifReader } from "omggif";
 import { parseGIF, decompressFrames } from "gifuct-js";
+import { join, posix as pathPosix } from "node:path";
+import resizeRgba from "@jsquash/resize";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { GifReader } from "omggif";
 import * as BMP from "bmp-js";
-/* @ts-ignore */
-import * as UTIF from "utif";
+import fs from "fs";
+
 /* @ts-ignore */
 import { GIFEncoder, quantize, applyPalette } from "gifenc";
-
-import { readFileSync } from "node:fs";
-import { join, posix as pathPosix } from "node:path";
-import { createHash } from "node:crypto";
-
-import fs from "fs";
+/* @ts-ignore */
+import { Resvg } from "@cf-wasm/resvg/node";
+/* @ts-ignore */
+import * as UTIF from "utif";
 
 const ALLOWED_IMAGE_SOURCE_HOSTS = new Set<string>([
   "kittycrypto.gg",

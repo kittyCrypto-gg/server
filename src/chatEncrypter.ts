@@ -1,6 +1,6 @@
 import crypto from "crypto";
-import fs from "fs";
 import path from "path";
+import fs from "fs";
 
 interface ChatMessageEncrypted {
   nick: string;

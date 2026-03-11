@@ -1,5 +1,5 @@
-import fetch from 'node-fetch';
 import { readdir, readFile } from 'fs/promises';
+import fetch from 'node-fetch';
 import path from 'path';
 
 /* @ts-ignore */
