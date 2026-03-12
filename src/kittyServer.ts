@@ -4,6 +4,7 @@ import { GithubAutoScheduler } from "./blogScheduler";
 import express, { Request, Response } from "express";
 import * as helpers from "./serverHelpers";
 import { tokenStore } from "./tokenStore";
+import { VisitsStore } from "./visits";
 import { renderPage } from "./render";
 import Server from "./baseServer";
 import * as types from "./types";
@@ -94,6 +95,8 @@ const comment = new Comment(server, comments_json_path, TokenStore);
 const allowedSourcesPath = path.resolve(process.cwd(), "data", "allowedSources.json");
 
 const storiesRoot = path.resolve(process.cwd(), "stories");
+
+const visits = new VisitsStore()
 
 // Endpoint to request a session token
 server.app.get("/session-token", async (req: Request, res: Response) => {
@@ -557,6 +560,40 @@ server.app.get("/render", async (req: Request, res: Response) => {
         console.warn(`Render failed for ${url}. Received token: ${token}. Error: ${message}`);
     }
 });
+
+server.app.post("/visits/log", async (req: Request, res: Response) => {
+  try {
+    const ip = helpers.getClientIp(req)
+    const page = helpers.readVisitSource(req)
+
+    const result = page.trim()
+      ? await visits.logVisit(ip, page)
+      : await visits.logVisit(ip)
+
+    res.status(200).json(result)
+  } catch (error) {
+    console.error("❌ Error logging visit:", error)
+    res.status(500).json({ error: "Failed to log visit." })
+  }
+})
+
+server.app.get("/visits/stats", async (req: Request, res: Response) => {
+  try {
+    const page = typeof req.query.page === "string" ? req.query.page : ""
+
+    if (page.trim()) {
+      const stats = await visits.getPageStats(page)
+      res.status(200).json(stats)
+      return
+    }
+
+    const stats = await visits.getStats()
+    res.status(200).json(stats)
+  } catch (error) {
+    console.error("❌ Error loading visit stats:", error)
+    res.status(500).json({ error: "Failed to load visit stats." })
+  }
+})
 
 server.app.get("/status", (_req: Request, res: Response) => {
     res.status(200).json({
