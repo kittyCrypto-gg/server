@@ -1,4 +1,4 @@
-# kittyServer - ${V9.11}
+# kittyServer - ${V11.01}
 
 Backend for [https://kittycrypto.gg](https://kittycrypto.gg) 🐾
 
