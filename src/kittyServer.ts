@@ -29,13 +29,12 @@ const comments_json_path = path.resolve(process.cwd(), "data", "comments.json");
 const allowedOrigins = [
     "https://kittycrypto.gg",
     "https://nojs.kittycrypto.gg",
-    "https://test.kittycrypto.gg",
     "https://api.kittycrypto.gg",
     "https://app.kittycrypto.gg",
     "https://chat.kittycrypto.gg",
     "https://srv.kittycrypto.gg",
     "https://kittycrypto-gg.translate.goog",
-    "http://localhost:8000",
+    "http://localhost:8080",
 ];
 
 const sitesToMap = new Set<string>([
@@ -562,37 +561,41 @@ server.app.get("/render", async (req: Request, res: Response) => {
 });
 
 server.app.post("/visits/log", async (req: Request, res: Response) => {
-  try {
-    const ip = helpers.getClientIp(req)
-    const page = helpers.readVisitSource(req)
+    try {
+        const ip = helpers.getClientIp(req)
+        const bodyPage = typeof req.body?.page === "string" ? req.body.page : ""
+        const fallbackPage = helpers.readVisitSource(req)
+        const page = bodyPage.trim() || fallbackPage.trim()
 
-    const result = page.trim()
-      ? await visits.logVisit(ip, page)
-      : await visits.logVisit(ip)
+        if (!page) {
+            res.status(400).json({ error: "A page path is required to log a visit." })
+            return
+        }
 
-    res.status(200).json(result)
-  } catch (error) {
-    console.error("❌ Error logging visit:", error)
-    res.status(500).json({ error: "Failed to log visit." })
-  }
+        const result = await visits.logVisit(ip, page)
+        res.status(200).json(result)
+    } catch (error) {
+        console.error("❌ Error logging visit:", error)
+        res.status(500).json({ error: "Failed to log visit." })
+    }
 })
 
 server.app.get("/visits/stats", async (req: Request, res: Response) => {
-  try {
-    const page = typeof req.query.page === "string" ? req.query.page : ""
+    try {
+        const page = typeof req.query.page === "string" ? req.query.page : ""
 
-    if (page.trim()) {
-      const stats = await visits.getPageStats(page)
-      res.status(200).json(stats)
-      return
+        if (page.trim()) {
+            const stats = await visits.getPageStats(page)
+            res.status(200).json(stats)
+            return
+        }
+
+        const stats = await visits.getStats()
+        res.status(200).json(stats)
+    } catch (error) {
+        console.error("❌ Error loading visit stats:", error)
+        res.status(500).json({ error: "Failed to load visit stats." })
     }
-
-    const stats = await visits.getStats()
-    res.status(200).json(stats)
-  } catch (error) {
-    console.error("❌ Error loading visit stats:", error)
-    res.status(500).json({ error: "Failed to load visit stats." })
-  }
 })
 
 server.app.get("/status", (_req: Request, res: Response) => {

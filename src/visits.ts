@@ -1,11 +1,11 @@
 import { MutexJsonStore } from "./mutexJsonStore"
 import * as path from "path"
 
-type IsoTimestamp = string
+type UnixTimestampMs = number
 
 type VisitEntry = {
     count: number
-    timestamps: IsoTimestamp[]
+    timestamps: UnixTimestampMs[]
 }
 
 type VisitBucket = {
@@ -13,15 +13,32 @@ type VisitBucket = {
     ips: Record<string, VisitEntry>
 }
 
-type VisitsModel = VisitBucket & {
+type VisitsModel = {
     pages: Record<string, VisitBucket>
-    updatedAt: IsoTimestamp
+    updatedAt: UnixTimestampMs
+}
+
+type LegacyIsoTimestamp = string
+
+type LegacyVisitEntry = {
+    count: number
+    timestamps: LegacyIsoTimestamp[]
+}
+
+type LegacyVisitBucket = {
+    visits: number
+    ips: Record<string, LegacyVisitEntry>
+}
+
+type LegacyVisitsModel = LegacyVisitBucket & {
+    pages: Record<string, LegacyVisitBucket>
+    updatedAt: LegacyIsoTimestamp | UnixTimestampMs
 }
 
 export type VisitsStats = {
     visits: number
     uniqueVisitors: number
-    updatedAt: IsoTimestamp
+    updatedAt: UnixTimestampMs
 }
 
 export type PageVisitsStats = VisitsStats & {
@@ -30,14 +47,14 @@ export type PageVisitsStats = VisitsStats & {
 
 export type PageVisitsLogResult = PageVisitsStats & {
     ipVisitCount: number
-    lastVisitAt: IsoTimestamp
+    lastVisitAt: UnixTimestampMs
 }
 
 export type VisitsLogResult = VisitsStats & {
     ip: string
     ipVisitCount: number
-    lastVisitAt: IsoTimestamp
-    page?: PageVisitsLogResult
+    lastVisitAt: UnixTimestampMs
+    page: PageVisitsLogResult
 }
 
 type VisitsStoreOptions = {
@@ -49,27 +66,25 @@ type VisitsStoreOptions = {
 
 export class VisitsStore {
     private readonly maxTimestampsPerIp: number
-    private readonly store: MutexJsonStore<VisitsModel>
+    private readonly store: MutexJsonStore<VisitsModel | LegacyVisitsModel>
 
     public constructor(options: VisitsStoreOptions = {}) {
         const filePath = options.filePath ?? path.resolve(process.cwd(), "data", "visits.json")
         this.maxTimestampsPerIp = options.maxTimestampsPerIp ?? 50
 
-        this.store = new MutexJsonStore<VisitsModel>({
+        this.store = new MutexJsonStore<VisitsModel | LegacyVisitsModel>({
             filePath,
             lockTimeoutMs: options.lockTimeoutMs,
             lockRetryDelayMs: options.lockRetryDelayMs,
             initialValue: () => ({
-                visits: 0,
-                ips: {},
                 pages: {},
-                updatedAt: new Date().toISOString()
+                updatedAt: Date.now()
             })
         })
     }
 
     public async getStats(): Promise<VisitsStats> {
-        const model = this.withPages(await this.store.read())
+        const model = this.normaliseModel(await this.store.read())
         return this.toStats(model)
     }
 
@@ -80,7 +95,7 @@ export class VisitsStore {
             throw new Error("VisitsStore.getPageStats requires a non-empty page string")
         }
 
-        const model = this.withPages(await this.store.read())
+        const model = this.normaliseModel(await this.store.read())
         const pageBucket = model.pages[normalisedPage] ?? this.createEmptyBucket()
 
         return {
@@ -91,50 +106,39 @@ export class VisitsStore {
         }
     }
 
-    public async logVisit(ip: string, at?: Date): Promise<VisitsLogResult>
-    public async logVisit(ip: string, page: string, at?: Date): Promise<VisitsLogResult>
-    public async logVisit(ip: string, pageOrAt?: string | Date, at: Date = new Date()): Promise<VisitsLogResult> {
+    public async logVisit(ip: string, page: string, at: Date = new Date()): Promise<VisitsLogResult> {
         const normalisedIp = this.normaliseIp(ip)
+        const normalisedPage = this.normalisePage(page)
 
         if (!normalisedIp) {
             throw new Error("VisitsStore.logVisit requires a non-empty ip string")
         }
 
-        const page = typeof pageOrAt === "string"
-            ? this.normalisePage(pageOrAt)
-            : ""
-
-        if (typeof pageOrAt === "string" && !page) {
+        if (!normalisedPage) {
             throw new Error("VisitsStore.logVisit requires a non-empty page string")
         }
 
-        const visitDate = pageOrAt instanceof Date ? pageOrAt : at
-        const timestamp = visitDate.toISOString()
+        const timestamp = at.getTime()
 
-        const next = await this.store.update((current) =>
-            this.applyVisit(this.withPages(current), normalisedIp, timestamp, page || undefined)
+        const next = this.normaliseModel(
+            await this.store.update((current) =>
+                this.applyVisit(this.normaliseModel(current), normalisedIp, normalisedPage, timestamp)
+            )
         )
 
-        const entry = next.ips[normalisedIp]
-
-        const result: VisitsLogResult = {
-            ...this.toStats(next),
-            ip: normalisedIp,
-            ipVisitCount: entry.count,
-            lastVisitAt: entry.timestamps[entry.timestamps.length - 1] ?? timestamp
-        }
-
-        if (!page) {
-            return result
-        }
-
-        const pageBucket = next.pages[page]
+        const pageBucket = next.pages[normalisedPage]
         const pageEntry = pageBucket.ips[normalisedIp]
+        const overallStats = this.toStats(next)
+        const overallIpVisitCount = this.getOverallIpVisitCount(next, normalisedIp)
+        const overallLastVisitAt = this.getOverallLastVisitAt(next, normalisedIp) ?? timestamp
 
         return {
-            ...result,
+            ...overallStats,
+            ip: normalisedIp,
+            ipVisitCount: overallIpVisitCount,
+            lastVisitAt: overallLastVisitAt,
             page: {
-                page,
+                page: normalisedPage,
                 visits: pageBucket.visits,
                 uniqueVisitors: Object.keys(pageBucket.ips).length,
                 updatedAt: next.updatedAt,
@@ -146,8 +150,8 @@ export class VisitsStore {
 
     private toStats(model: VisitsModel): VisitsStats {
         return {
-            visits: model.visits,
-            uniqueVisitors: Object.keys(model.ips).length,
+            visits: this.getOverallVisits(model),
+            uniqueVisitors: this.getOverallUniqueVisitors(model),
             updatedAt: model.updatedAt
         }
     }
@@ -155,24 +159,13 @@ export class VisitsStore {
     private applyVisit(
         model: VisitsModel,
         ip: string,
-        timestamp: IsoTimestamp,
-        page?: string
+        page: string,
+        timestamp: UnixTimestampMs
     ): VisitsModel {
-        const nextOverall = this.applyVisitToBucket(model, ip, timestamp)
-
-        if (!page) {
-            return {
-                ...nextOverall,
-                pages: model.pages,
-                updatedAt: timestamp
-            }
-        }
-
         const currentPage = model.pages[page] ?? this.createEmptyBucket()
         const nextPage = this.applyVisitToBucket(currentPage, ip, timestamp)
 
         return {
-            ...nextOverall,
             pages: {
                 ...model.pages,
                 [page]: nextPage
@@ -184,7 +177,7 @@ export class VisitsStore {
     private applyVisitToBucket(
         bucket: VisitBucket,
         ip: string,
-        timestamp: IsoTimestamp
+        timestamp: UnixTimestampMs
     ): VisitBucket {
         const existing = bucket.ips[ip]
 
@@ -207,6 +200,142 @@ export class VisitsStore {
         }
     }
 
+    private normaliseModel(model: VisitsModel | LegacyVisitsModel): VisitsModel {
+        const rawPages = this.readPages(model)
+        const pages: Record<string, VisitBucket> = {}
+
+        for (const [rawPage, rawBucket] of Object.entries(rawPages)) {
+            const page = this.normalisePage(rawPage)
+
+            if (!page) {
+                continue
+            }
+
+            const bucket = this.normaliseBucket(rawBucket)
+
+            if (!bucket.visits && !Object.keys(bucket.ips).length) {
+                continue
+            }
+
+            pages[page] = bucket
+        }
+
+        return {
+            pages,
+            updatedAt: this.normaliseTimestamp((model as { updatedAt?: unknown }).updatedAt) ?? Date.now()
+        }
+    }
+
+    private normaliseBucket(value: unknown): VisitBucket {
+        if (!this.isRecord(value)) {
+            return this.createEmptyBucket()
+        }
+
+        const rawIps = this.isRecord(value.ips) ? value.ips : {}
+        const ips: Record<string, VisitEntry> = {}
+        let visits = 0
+
+        for (const [rawIp, rawEntry] of Object.entries(rawIps)) {
+            const ip = this.normaliseIp(rawIp)
+
+            if (!ip) {
+                continue
+            }
+
+            const entry = this.normaliseEntry(rawEntry)
+
+            if (!entry) {
+                continue
+            }
+
+            ips[ip] = entry
+            visits += entry.count
+        }
+
+        return {
+            visits,
+            ips
+        }
+    }
+
+    private normaliseEntry(value: unknown): VisitEntry | undefined {
+        if (!this.isRecord(value)) {
+            return undefined
+        }
+
+        const rawTimestamps = Array.isArray(value.timestamps) ? value.timestamps : []
+        const timestamps = rawTimestamps
+            .map((item) => this.normaliseTimestamp(item))
+            .filter((item): item is number => typeof item === "number")
+            .sort((left, right) => left - right)
+            .slice(-this.maxTimestampsPerIp)
+
+        const rawCount = value.count
+        const count = typeof rawCount === "number" && Number.isFinite(rawCount) && rawCount > 0
+            ? Math.floor(rawCount)
+            : timestamps.length
+
+        if (!count) {
+            return undefined
+        }
+
+        return {
+            count,
+            timestamps
+        }
+    }
+
+    private getOverallVisits(model: VisitsModel): number {
+        let visits = 0
+
+        for (const bucket of Object.values(model.pages)) {
+            visits += bucket.visits
+        }
+
+        return visits
+    }
+
+    private getOverallUniqueVisitors(model: VisitsModel): number {
+        const uniqueIps = new Set<string>()
+
+        for (const bucket of Object.values(model.pages)) {
+            for (const ip of Object.keys(bucket.ips)) {
+                uniqueIps.add(ip)
+            }
+        }
+
+        return uniqueIps.size
+    }
+
+    private getOverallIpVisitCount(model: VisitsModel, ip: string): number {
+        let count = 0
+
+        for (const bucket of Object.values(model.pages)) {
+            count += bucket.ips[ip]?.count ?? 0
+        }
+
+        return count
+    }
+
+    private getOverallLastVisitAt(model: VisitsModel, ip: string): UnixTimestampMs | undefined {
+        let lastVisitAt: UnixTimestampMs | undefined
+
+        for (const bucket of Object.values(model.pages)) {
+            const entry = bucket.ips[ip]
+            const candidate = entry?.timestamps[entry.timestamps.length - 1]
+
+            if (typeof candidate !== "number") {
+                continue
+            }
+
+            if (typeof lastVisitAt !== "number" || candidate > lastVisitAt) {
+                lastVisitAt = candidate
+            }
+        }
+
+        return lastVisitAt
+    }
+
     private createEmptyBucket(): VisitBucket {
         return {
             visits: 0,
@@ -214,14 +343,12 @@ export class VisitsStore {
         }
     }
 
-    private withPages(model: VisitsModel): VisitsModel {
-        return {
-            ...model,
-            pages: this.isRecord(model.pages) ? model.pages as Record<string, VisitBucket> : {}
-        }
+    private readPages(model: VisitsModel | LegacyVisitsModel): Record<string, unknown> {
+        const candidate = (model as { pages?: unknown }).pages
+        return this.isRecord(candidate) ? candidate : {}
     }
 
-    private appendCapped(list: string[], value: string, max: number): string[] {
+    private appendCapped(list: number[], value: number, max: number): number[] {
         const next = [...list, value]
         const overflow = next.length - max
 
@@ -232,8 +359,30 @@ export class VisitsStore {
         return next.slice(overflow)
     }
 
+    private normaliseTimestamp(value: unknown): UnixTimestampMs | undefined {
+        if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+            return Math.floor(value)
+        }
+
+        if (typeof value !== "string") {
+            return undefined
+        }
+
+        const parsed = Date.parse(value)
+
+        if (!Number.isFinite(parsed)) {
+            return undefined
+        }
+
+        return parsed
+    }
+
     private normaliseIp(ip: string): string {
         const trimmed = ip.trim()
+
+        if (!trimmed) {
+            return ""
+        }
 
         if (trimmed.startsWith("::ffff:")) {
             return trimmed.slice("::ffff:".length)
