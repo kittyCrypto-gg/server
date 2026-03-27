@@ -598,6 +598,37 @@ server.app.get("/visits/stats", async (req: Request, res: Response) => {
     }
 })
 
+server.app.get("/presence", async (_req: Request, res: Response) => {
+    try {
+        const presence = await helpers.getPublicPresence();
+        console.log("📡 Current presence snapshot:", presence);
+        res.status(200).json(presence);
+    } catch (error) {
+        console.error("❌ Error loading presence:", error);
+        res.status(502).json({ error: "Failed to load presence." });
+    }
+});
+
+server.app.get("/presence/internal", async (_req: Request, res: Response) => {
+    try {
+        const presence = await helpers.getInternalPresence();
+        console.log("📡 Current internal presence snapshot:", presence);
+        res.status(200).json(presence);
+    } catch (error) {
+        console.error("❌ Error loading internal presence:", error);
+        res.status(502).json({ error: "Failed to load internal presence." });
+    }
+});
+
+server.app.get("/presence/sshd", async (_req: Request, res: Response) => {
+    try {
+        res.status(200).json(helpers.psGrepSSHD());
+    } catch (error) {
+        console.error("❌ Error checking SSHD status:", error);
+        res.status(500).json({ error: "Failed to check SSHD status." });
+    }
+});
+
 server.app.get("/status", (_req: Request, res: Response) => {
     res.status(200).json({
         ok: true,
