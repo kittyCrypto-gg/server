@@ -8,10 +8,20 @@ type CloudflareRequestInit = RequestInit & {
     cf?: CfCacheOptions;
 };
 
+type AllowedSourceRule =
+    | {
+        kind: "exact";
+        value: string;
+    }
+    | {
+        kind: "prefix";
+        value: string;
+    };
+
 const ALLOWLIST_URL = "https://srv.kittycrypto.gg/allowedSources.json";
 const ALLOWLIST_TTL_MS = 60_000;
 
-let cachedAllowlist: Set<string> | null = null;
+let cachedAllowlist: AllowedSourceRule[] | null = null;
 let cachedAtMs = 0;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,23 +37,62 @@ function parseSourcesPayload(value: unknown): string[] | null {
     const cleaned: string[] = [];
     for (const item of sourcesValue) {
         if (typeof item !== "string") continue;
+
         const trimmed = item.trim();
         if (!trimmed) continue;
+
         cleaned.push(trimmed);
     }
 
     return cleaned;
 }
 
-function emptyAllowlist(): Set<string> {
-    cachedAllowlist = new Set<string>();
+function safeHttpsUrl(value: string): string | null {
+    let url: URL;
+
+    try {
+        url = new URL(value);
+    } catch {
+        return null;
+    }
+
+    if (url.protocol !== "https:") return null;
+    if (url.username || url.password) return null;
+
+    return url.toString();
+}
+
+function compileAllowedRules(sources: string[]): AllowedSourceRule[] {
+    const rules: AllowedSourceRule[] = [];
+
+    for (const source of sources) {
+        const isWildcard = source.endsWith("*");
+        const rawValue = isWildcard ? source.slice(0, -1) : source;
+        const safeValue = safeHttpsUrl(rawValue);
+
+        if (safeValue === null) continue;
+
+        rules.push(
+            isWildcard
+                ? { kind: "prefix", value: safeValue }
+                : { kind: "exact", value: safeValue }
+        );
+    }
+
+    return rules;
+}
+
+function emptyAllowlist(): AllowedSourceRule[] {
+    cachedAllowlist = [];
     cachedAtMs = Date.now();
     return cachedAllowlist;
 }
 
-async function getAllowedUrls(): Promise<Set<string>> {
+async function getAllowedRules(): Promise<AllowedSourceRule[]> {
     const now = Date.now();
-    if (cachedAllowlist !== null && now - cachedAtMs < ALLOWLIST_TTL_MS) return cachedAllowlist;
+    if (cachedAllowlist !== null && now - cachedAtMs < ALLOWLIST_TTL_MS) {
+        return cachedAllowlist;
+    }
 
     const controller = new AbortController();
     const timeoutId: ReturnType<typeof setTimeout> = setTimeout(() => controller.abort(), 2500);
@@ -62,8 +111,9 @@ async function getAllowedUrls(): Promise<Set<string>> {
         const sources = parseSourcesPayload(json);
         if (sources === null) return emptyAllowlist();
 
-        cachedAllowlist = new Set<string>(sources);
+        cachedAllowlist = compileAllowedRules(sources);
         cachedAtMs = now;
+
         return cachedAllowlist;
     } catch {
         return emptyAllowlist();
@@ -72,18 +122,13 @@ async function getAllowedUrls(): Promise<Set<string>> {
     }
 }
 
-function safeHttpsUrl(value: string): string | null {
-    let url: URL;
-    try {
-        url = new URL(value);
-    } catch {
-        return null;
+function isAllowedUrl(url: string, rules: AllowedSourceRule[]): boolean {
+    for (const rule of rules) {
+        if (rule.kind === "exact" && rule.value === url) return true;
+        if (rule.kind === "prefix" && url.startsWith(rule.value)) return true;
     }
 
-    if (url.protocol !== "https:") return null;
-    if (url.username || url.password) return null;
-
-    return url.toString();
+    return false;
 }
 
 const worker = {
@@ -111,27 +156,22 @@ const worker = {
             return new Response("Blocked: invalid upstream URL", { status: 403 });
         }
 
-        const upstreamParsed = new URL(upstreamUrl);
-        const canonical = upstreamParsed.toString();
-
-        const allowlist = await getAllowedUrls();
-        const allowed = allowlist.has(srcUrl) || allowlist.has(canonical);
-
-        if (!allowed) {
+        const rules = await getAllowedRules();
+        if (!isAllowedUrl(upstreamUrl, rules)) {
             return new Response("Blocked: src not allowlisted", { status: 403 });
         }
 
         const upstreamInit: CloudflareRequestInit = {
+            method,
             headers: { Accept: "application/javascript,*/*;q=0.1" },
             cf: {
                 cacheEverything: true,
                 cacheTtl: 60 * 60 * 24,
-                cacheKey: `external:${canonical}`
+                cacheKey: `external:${upstreamUrl}`
             }
         };
 
-        const upstreamRes = await fetch(canonical, upstreamInit);
-
+        const upstreamRes = await fetch(upstreamUrl, upstreamInit);
         if (!upstreamRes.ok) {
             return new Response(`Upstream failed: ${upstreamRes.status}`, { status: 502 });
         }
@@ -140,9 +180,13 @@ const worker = {
         headers.set("Content-Type", "application/javascript; charset=utf-8");
         headers.set("Cache-Control", "public, max-age=86400, s-maxage=604800, immutable");
         headers.set("X-Content-Type-Options", "nosniff");
+        headers.set("Access-Control-Allow-Origin", "*");
         headers.delete("set-cookie");
 
-        return new Response(upstreamRes.body, { status: 200, headers });
+        return new Response(upstreamRes.body, {
+            status: 200,
+            headers
+        });
     }
 } satisfies { fetch: (request: Request) => Promise<Response> };
 
