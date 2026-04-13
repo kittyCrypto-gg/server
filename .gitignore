@@ -1,0 +1,18 @@
+# Ignore user data
+.vscode
+# Ignore ./blockchain
+blockchain/
+# Ignore ./stories
+stories/
+# Ignore the superseded folder
+superseded/
+#node_modules
+node_modules/
+#data folder
+data/
+#ignore .env file
+.env
+#build
+build/
+#website
+website/

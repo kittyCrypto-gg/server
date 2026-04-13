@@ -1,6 +1,7 @@
 import * as ImageTransformer from "./imageTransformer";
 import { execSync } from "node:child_process";
 import { Request, Response } from "express";
+import { tokenStore } from "./tokenStore";
 import Server from "./baseServer";
 import * as types from "./types";
 import Chat from "./kittyChat";
@@ -59,6 +60,18 @@ type ChatbotDoc = {
 
 type NodeErrorWithCode = Error & { code?: string };
 
+export interface OpenChatStreamOptions {
+    req: Request;
+    res: Response;
+    token: string;
+    tokenStore: tokenStore;
+    chat: Chat;
+    clients: types.SseClient[];
+    hasKey: boolean;
+    heartbeatMS?: number;
+    retryMS?: number;
+}
+
 export function parseImgQuery(req: Request): types.ImgQueryParseResult {
     const src = readTrimmedQueryString(req, "src");
     if (!src) {
@@ -77,7 +90,7 @@ export function parseImgQuery(req: Request): types.ImgQueryParseResult {
         return {
             ok: false,
             httpStatus: 400,
-            message: "Invalid srcFormat/srcFormatHint. Use png|jpg|jpeg|gif|bmp|svg|tif|tiff",
+            message: "Invalid srcFormat/srcFormatHint. Use png|jpg|jpeg|gif|bmp|svg|tif|tiff"
         };
     }
 
@@ -89,7 +102,7 @@ export function parseImgQuery(req: Request): types.ImgQueryParseResult {
         src,
         format,
         srcFormatHint,
-        resize: { width: width ?? undefined, height: height ?? undefined },
+        resize: { width: width ?? undefined, height: height ?? undefined }
     };
 }
 
@@ -161,7 +174,7 @@ function createInitialChatbotDoc(): ChatbotDoc {
     return {
         version: 0,
         updatedAt: new Date().toISOString(),
-        users: [],
+        users: []
     };
 }
 
@@ -185,7 +198,7 @@ function normaliseChatbotDoc(value: unknown): ChatbotDoc {
     return {
         version: typeof raw.version === "number" ? raw.version : 0,
         updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
-        users,
+        users
     };
 }
 
@@ -252,7 +265,7 @@ export function registerPage(error = "", apiKey = ""): string {
             .replaceAll("&", "&amp;")
             .replaceAll("<", "&lt;")
             .replaceAll(">", "&gt;")
-            .replaceAll('"', "&quot;")
+            .replaceAll("\"", "&quot;")
             .replaceAll("'", "&#39;");
     };
 
@@ -274,6 +287,7 @@ export async function getChapters(storyPath: string): Promise<{ chapters: number
     const BASE = "https://kittycrypto.gg";
 
     const remotePath = storyPath.replace(/^\.\//, "");
+
     try {
         const url0 = `${BASE}/${remotePath}/chapt0.xml`;
         const res0 = await fetch(url0, { method: "HEAD" });
@@ -284,11 +298,14 @@ export async function getChapters(storyPath: string): Promise<{ chapters: number
     } catch { }
 
     let i = 1;
+
     while (true) {
         const url = `${BASE}/${remotePath}/chapt${i}.xml`;
+
         try {
             const res = await fetch(url, { method: "HEAD" });
             if (!res.ok) break;
+
             chapters.push(i);
             urls.push(url);
             i++;
@@ -307,21 +324,31 @@ export async function getHtmlPagesFromGithub(repoOwner: string, repoName: string
 
     const headers: Record<string, string> = { "User-Agent": "kitty-sitemap-bot" };
 
-    if (process.env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
+    if (process.env.GITHUB_TOKEN) {
+        headers["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
 
     const res = await fetch(apiUrl, { headers });
 
-    if (!res.ok) throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+        throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
+    }
+
     const items = await res.json() as types.GithubContentItem[];
     let urls: string[] = [];
+
     for (const item of items) {
         if (item.type === "file" && item.name.endsWith(".html")) {
             const pagePath = dir ? `${dir}/${item.name}` : item.name;
             urls.push(`https://kittycrypto.gg/${pagePath.replace(/^index\.html$/, "")}`);
-        } else if (item.type === "dir") {
+            continue;
+        }
+
+        if (item.type === "dir") {
             urls.push(...await getHtmlPagesFromGithub(repoOwner, repoName, item.path));
         }
     }
+
     return urls;
 }
 
@@ -340,7 +367,10 @@ export function getClientIp(req: Request): string {
         ? raw.split(",")[0]!.trim()
         : (req.socket.remoteAddress || "");
 
-    if (ip.startsWith("::ffff:")) ip = ip.substring(7);
+    if (ip.startsWith("::ffff:")) {
+        ip = ip.substring(7);
+    }
+
     return ip;
 }
 
@@ -350,15 +380,107 @@ export function originAllowsDecrypted(origin: string | undefined, server: Server
     return server.allowedOriginsList.includes(origin);
 }
 
+export function isSseResponseWritable(res: Response): boolean {
+    if (res.writableEnded) return false;
+    if (res.destroyed) return false;
+    if (res.socket?.destroyed) return false;
+    return true;
+}
+
+export function writeSseJson(res: Response, payload: unknown): void {
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+export function writeSseComment(res: Response, comment: string): void {
+    res.write(`: ${comment}\n\n`);
+}
+
+export function removeSseClient(clients: types.SseClient[], res: Response): void {
+    const index = clients.findIndex((client) => client.res === res);
+
+    if (index !== -1) {
+        clients.splice(index, 1);
+    }
+}
+
+export async function openChatStream(options: OpenChatStreamOptions): Promise<void> {
+    const {
+        req,
+        res,
+        token,
+        tokenStore,
+        chat,
+        clients,
+        hasKey,
+        heartbeatMS = 15_000,
+        retryMS = 5_000
+    } = options;
+
+    tokenStore.touchToken(token);
+    req.socket.setKeepAlive(true, heartbeatMS);
+
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    res.write(`retry: ${retryMS}\n\n`);
+    writeSseComment(res, "connected");
+
+    const initialPayload = hasKey
+        ? await chat.loadAndDecryptChat()
+        : await chat.loadEncryptedChat();
+
+    writeSseJson(res, initialPayload);
+
+    clients.push({ res, hasKey });
+
+    const heartbeat: ReturnType<typeof setInterval> = setInterval(() => {
+        if (!isSseResponseWritable(res) || req.destroyed) {
+            return;
+        }
+
+        tokenStore.touchToken(token);
+        writeSseComment(res, `keepalive ${Date.now()}`);
+    }, heartbeatMS);
+
+    const cleanup = (): void => {
+        clearInterval(heartbeat);
+        removeSseClient(clients, res);
+    };
+
+    req.on("close", cleanup);
+    req.on("aborted", cleanup);
+    res.on("close", cleanup);
+    res.on("finish", cleanup);
+}
+
 export async function notifyClients(chat: Chat, clients: types.SseClient[]): Promise<void> {
     const [decrypted, encrypted] = await Promise.all([
         chat.loadAndDecryptChat(),
-        chat.loadEncryptedChat(),
+        chat.loadEncryptedChat()
     ]);
 
-    for (const c of clients) {
-        const payload = c.hasKey ? decrypted : encrypted;
-        c.res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    const staleResponses: Response[] = [];
+
+    for (const client of clients) {
+        if (!isSseResponseWritable(client.res)) {
+            staleResponses.push(client.res);
+            continue;
+        }
+
+        const payload = client.hasKey ? decrypted : encrypted;
+
+        try {
+            writeSseJson(client.res, payload);
+        } catch {
+            staleResponses.push(client.res);
+        }
+    }
+
+    for (const res of staleResponses) {
+        removeSseClient(clients, res);
     }
 }
 
@@ -367,6 +489,7 @@ async function readFileOrEmpty(filePath: string): Promise<string> {
         return await fs.promises.readFile(filePath, "utf-8");
     } catch (error: unknown) {
         const code = (error as NodeErrorWithCode).code;
+
         if (code === "ENOENT") {
             return "";
         }
@@ -409,6 +532,7 @@ export async function trackChatChanges(chat_json_path: string, chat: Chat, clien
 
 export async function resolveStoryPath(rest: string, storiesRoot: string): Promise<string | null> {
     let cleaned: string;
+
     try {
         cleaned = decodeURIComponent(rest);
     } catch {
@@ -431,9 +555,11 @@ export async function resolveStoryPath(rest: string, storiesRoot: string): Promi
     }
 
     const filePath = path.resolve(storiesRoot, ...segments);
-
     const rel = path.relative(storiesRoot, filePath);
-    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+        return null;
+    }
 
     try {
         const stat = await fs.promises.stat(filePath);
@@ -459,18 +585,22 @@ export async function exploreStories(storiesRoot: string): Promise<types.Stories
     };
 
     const entries = await fs.promises.readdir(storiesRoot, { withFileTypes: true });
-    const storyDirs = entries.filter((e) => e.isDirectory() && isStoryDirName(e.name));
+    const storyDirs = entries.filter((entry) => entry.isDirectory() && isStoryDirName(entry.name));
 
     for (const dir of storyDirs) {
         const storyPath = path.join(storiesRoot, dir.name);
         const files = await fs.promises.readdir(storyPath, { withFileTypes: true });
 
         const chapters = files
-            .filter((f) => f.isFile() && isChapterXml(f.name))
-            .map((f) => f.name)
+            .filter((file) => file.isFile() && isChapterXml(file.name))
+            .map((file) => file.name)
             .sort((a, b) => {
-                const na = Number((a.match(/^chapt(\d+)\.xml$/i) ?? ["", "0"])[1]);
-                const nb = Number((b.match(/^chapt(\d+)\.xml$/i) ?? ["", "0"])[1]);
+                const aMatch = a.match(/^chapt(\d+)\.xml$/i);
+                const bMatch = b.match(/^chapt(\d+)\.xml$/i);
+
+                const na = Number(aMatch?.[1] ?? "0");
+                const nb = Number(bMatch?.[1] ?? "0");
+
                 return na - nb;
             });
 
@@ -502,11 +632,11 @@ export async function genSiteMap(
         const storiesRes = await fetch("https://srv.kittycrypto.gg/stories.json");
         const stories = await storiesRes.json() as Record<string, string[]>;
 
-        const storyChapterLinks = Object.entries(stories).flatMap(([storyPath, chapters]) =>
-            chapters.map((chapter) =>
-                `https://nojs.kittycrypto.gg/reader.html?story=${encodeURIComponent(storyPath)}&chapter=${encodeURIComponent(chapter)}`
-            )
-        );
+        const storyChapterLinks = Object.entries(stories).flatMap(([storyPath, chapters]) => {
+            return chapters.map((chapter) => {
+                return `https://nojs.kittycrypto.gg/reader.html?story=${encodeURIComponent(storyPath)}&chapter=${encodeURIComponent(chapter)}`;
+            });
+        });
 
         const allUrls = [...filteredGithubPages, ...storyChapterLinks]
             .map((url) => url.replace(/\/+$/, ""))
@@ -541,20 +671,20 @@ export async function genSiteMap(
 }
 
 export const readVisitSource = (req: Request): string => {
-    const bodySource = typeof req.body?.source === "string" ? req.body.source : ""
+    const bodySource = typeof req.body?.source === "string" ? req.body.source : "";
 
     if (bodySource.trim()) {
-        return bodySource
+        return bodySource;
     }
 
-    const querySource = typeof req.query.source === "string" ? req.query.source : ""
+    const querySource = typeof req.query.source === "string" ? req.query.source : "";
 
     if (querySource.trim()) {
-        return querySource
+        return querySource;
     }
 
-    return typeof req.headers.referer === "string" ? req.headers.referer : ""
-}
+    return typeof req.headers.referer === "string" ? req.headers.referer : "";
+};
 
 function isInternalPresenceSnapshot(value: unknown): value is InternalPresenceSnapshot {
     if (typeof value !== "object" || value === null) {
@@ -564,13 +694,13 @@ function isInternalPresenceSnapshot(value: unknown): value is InternalPresenceSn
     const snapshot = value as Record<string, unknown>;
 
     return (
-        typeof snapshot.userId === "string"
-        && typeof snapshot.status === "string"
-        && typeof snapshot.isAfk === "boolean"
-        && typeof snapshot.activity === "string"
-        && (typeof snapshot.lastSshSeenAt === "number" || snapshot.lastSshSeenAt === null)
-        && (typeof snapshot.lastActivityAt === "number" || snapshot.lastActivityAt === null)
-        && typeof snapshot.updatedAt === "number"
+        typeof snapshot.userId === "string" &&
+        typeof snapshot.status === "string" &&
+        typeof snapshot.isAfk === "boolean" &&
+        typeof snapshot.activity === "string" &&
+        (typeof snapshot.lastSshSeenAt === "number" || snapshot.lastSshSeenAt === null) &&
+        (typeof snapshot.lastActivityAt === "number" || snapshot.lastActivityAt === null) &&
+        typeof snapshot.updatedAt === "number"
     );
 }
 
@@ -634,8 +764,10 @@ export async function getPublicPresence(): Promise<PublicPresenceSnapshot> {
     const kitty = internalPresence.find((entry) => entry.userId === "kitty");
 
     if (!kitty) {
-        throw new Error('Presence entry for "kitty" was not found.');
+        throw new Error("Presence entry for \"kitty\" was not found.");
     }
+
+    kitty.status = kitty.status.toLowerCase() === "terminal" ? "Online" : kitty.status;
 
     return {
         status: kitty.status,

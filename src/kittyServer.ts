@@ -35,7 +35,7 @@ const allowedOrigins = [
     "https://chat.kittycrypto.gg",
     "https://srv.kittycrypto.gg",
     "https://kittycrypto-gg.translate.goog",
-    "http://localhost:8080",
+    "https://test.kittycrypto.gg",
 ];
 
 const sitesToMap = new Set<string>([
@@ -105,145 +105,146 @@ const visits = new VisitsStore()
 server.app.get("/session-token",
     async (req: Request, res: Response) => {
 
-    try {
-        await TokenStore.waitUntilReady();
-    } catch {
-        res.status(503).json({ error: "Server initialising. Try again." });
-        return;
-    }
+        try {
+            await TokenStore.waitUntilReady();
+        } catch {
+            res.status(503).json({ error: "Server initialising. Try again." });
+            return;
+        }
 
-    const sessionToken = helpers.generateSessionToken();
-    TokenStore.touchToken(sessionToken);
-    res.json({ sessionToken });
-});
+        const sessionToken = helpers.generateSessionToken();
+        TokenStore.touchToken(sessionToken);
+        res.json({ sessionToken });
+    });
 
 server.app.post("/session-token/reregister",
     async (req: Request, res: Response) => {
-    try {
-        await TokenStore.waitUntilReady();
-    } catch {
-        res.status(503).json({ error: "Server initialising. Try again." });
-        return;
-    }
+        try {
+            await TokenStore.waitUntilReady();
+        } catch {
+            res.status(503).json({ error: "Server initialising. Try again." });
+            return;
+        }
 
-    const sessionToken = typeof req.body?.sessionToken === "string" ? req.body.sessionToken : "";
+        const sessionToken = typeof req.body?.sessionToken === "string" ? req.body.sessionToken : "";
 
-    if (!sessionToken) {
-        res.status(422).json({ error: "Missing sessionToken." });
-        return;
-    }
+        if (!sessionToken) {
+            res.status(422).json({ error: "Missing sessionToken." });
+            return;
+        }
 
-    if (!TokenStore.tokenExistsAndValid(sessionToken)) {
-        res.status(403).json({ error: "Session expired." });
-        return;
-    }
+        if (!TokenStore.tokenExistsAndValid(sessionToken)) {
+            res.status(403).json({ error: "Session expired." });
+            return;
+        }
 
-    TokenStore.touchToken(sessionToken);
+        TokenStore.touchToken(sessionToken);
 
-    res.status(200).json({
-        ok: true,
-        sessionToken,
-        expiresAtMs: TokenStore.getExpiryMs(sessionToken),
+        res.status(200).json({
+            ok: true,
+            sessionToken,
+            expiresAtMs: TokenStore.getExpiryMs(sessionToken),
+        });
     });
-});
 
 server.app.get("/get-ip", cors({ origin: "*" }),
-(req: Request, res: Response) => {
-    res.json({ ip: helpers.getClientIp(req) });
-});
+    (req: Request, res: Response) => {
+        res.json({ ip: helpers.getClientIp(req) });
+    });
 
 server.app.get("/get-ip/sha256", cors({ origin: "*" }),
-(req: Request, res: Response) => {
-    try {
-        const hashedId = chat.generateUserId(helpers.getClientIp(req));
-        res.json({ hashedIp: hashedId });
-    } catch (error) {
-        console.error("❌ Error hashing IP:", error);
-        res.status(500).json({ error: "Failed to hash IP address." });
-    }
-});
+    (req: Request, res: Response) => {
+        try {
+            const hashedId = chat.generateUserId(helpers.getClientIp(req));
+            res.json({ hashedIp: hashedId });
+        } catch (error) {
+            console.error("❌ Error hashing IP:", error);
+            res.status(500).json({ error: "Failed to hash IP address." });
+        }
+    });
 
 server.app.get("/chat/stream",
     async (req: Request, res: Response) => {
-    try {
-        await TokenStore.waitUntilReady();
-    } catch {
-        res.status(503).json([{ nick: "system", id: "0x0000000000", msg: "Server initialising. Try again." }]);
-        return;
+        try {
+            await TokenStore.waitUntilReady();
+        } catch {
+            res.status(503).json([
+                {
+                    nick: "system",
+                    id: "0x0000000000",
+                    msg: "Server initialising. Try again."
+                }
+            ]);
+            return;
+        }
+
+        const token = typeof req.query.token === "string" ? req.query.token : "";
+
+        if (!token || !TokenStore.tokenExistsAndValid(token)) {
+            res.status(403).json([
+                {
+                    nick: "system",
+                    id: "0x0000000000",
+                    msg: "Session expired. Refresh page to reconnect."
+                }
+            ]);
+            return;
+        }
+
+        const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+        const hasKey = helpers.originAllowsDecrypted(origin, server);
+
+        await helpers.openChatStream({
+            req,
+            res,
+            token,
+            tokenStore: TokenStore,
+            chat,
+            clients,
+            hasKey
+        });
     }
-
-    const token = req.query.token as string | undefined;
-
-    if (!token || !TokenStore.tokenExistsAndValid(token)) {
-        res.status(403).json([{ nick: "system", id: "0x0000000000", msg: "Session expired. Refresh page to reconnect." }]);
-        return;
-    }
-
-    TokenStore.touchToken(token);
-
-    const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-    const wantsDecrypted = helpers.originAllowsDecrypted(origin, server);
-
-    res.setHeader("X-Accel-Buffering", "no");
-    res.setHeader("Content-Encoding", "identity");
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
-
-    const initial = wantsDecrypted
-        ? await chat.loadAndDecryptChat()
-        : await chat.loadEncryptedChat();
-
-    res.write(`data: ${JSON.stringify(initial)}\n\n`);
-
-    clients.push({ res, hasKey: wantsDecrypted });
-
-    req.on("close", () => {
-        const idx = clients.findIndex((c) => c.res === res);
-        if (idx !== -1) clients.splice(idx, 1);
-    });
-});
+);
 
 server.app.get("/comments/load",
     async (req: Request, res: Response) => {
-    try {
-        const rawPage = typeof req.query.page === "string" ? req.query.page : "";
-        const page = decodeURIComponent(rawPage);
+        try {
+            const rawPage = typeof req.query.page === "string" ? req.query.page : "";
+            const page = decodeURIComponent(rawPage);
 
-        console.log("🔍 Loading comments for page:", page);
+            console.log("🔍 Loading comments for page:", page);
 
-        if (!page) {
-            res.status(400).json({ error: "Missing or invalid 'page' query parameter." });
-            return;
+            if (!page) {
+                res.status(400).json({ error: "Missing or invalid 'page' query parameter." });
+                return;
+            }
+
+            const commentsFileExists = await fs.promises
+                .stat(comments_json_path)
+                .then(() => true)
+                .catch(() => false);
+
+            if (!commentsFileExists) {
+                res.status(200).json([]);
+                return;
+            }
+
+            const rawData = await fs.promises.readFile(comments_json_path, "utf-8");
+            const allComments = JSON.parse(rawData);
+
+            if (!Array.isArray(allComments)) {
+                throw new Error("Invalid comment store format.");
+            }
+
+            const matchingComments = allComments.filter((comment: CommentData) => comment.page === page);
+
+            console.log(`📜 Found ${matchingComments.length} comments for page: ${page}`);
+            res.status(200).json(matchingComments);
+        } catch (error) {
+            console.error("❌ Error retrieving comments:", error);
+            res.status(500).json({ error: "Failed to load comments." });
         }
-
-        const commentsFileExists = await fs.promises
-            .stat(comments_json_path)
-            .then(() => true)
-            .catch(() => false);
-
-        if (!commentsFileExists) {
-            res.status(200).json([]);
-            return;
-        }
-
-        const rawData = await fs.promises.readFile(comments_json_path, "utf-8");
-        const allComments = JSON.parse(rawData);
-
-        if (!Array.isArray(allComments)) {
-            throw new Error("Invalid comment store format.");
-        }
-
-        const matchingComments = allComments.filter((comment: CommentData) => comment.page === page);
-
-        console.log(`📜 Found ${matchingComments.length} comments for page: ${page}`);
-        res.status(200).json(matchingComments);
-    } catch (error) {
-        console.error("❌ Error retrieving comments:", error);
-        res.status(500).json({ error: "Failed to load comments." });
-    }
-});
+    });
 
 chat.onNewMessage = async () => {
     await helpers.notifyClients(chat, clients);
@@ -251,14 +252,14 @@ chat.onNewMessage = async () => {
 
 server.app.get('/robots.txt',
     (req, res) => { // Serve robots.txt
-    res.type('text/plain');
-    res.send(
-        `User-agent: *
+        res.type('text/plain');
+        res.send(
+            `User-agent: *
             Disallow:
             Sitemap: https://srv.kittycrypto.gg/sitemap.xml
             Host: nojs.kittycrypto.gg`
-    );
-});
+        );
+    });
 
 server.app.get("/stories.json",
     async (_req: Request, res: Response) => {
@@ -707,12 +708,12 @@ server.app.post("/website/manifest/update",
 
 server.app.get("/status",
     (_req: Request, res: Response) => {
-    res.status(200).json({
-        ok: true,
-        online: true,
-        now: new Date().toISOString()
+        res.status(200).json({
+            ok: true,
+            online: true,
+            now: new Date().toISOString()
+        });
     });
-});
 
 server.start();
 void helpers.trackChatChanges(chat_json_path, chat, clients).catch((error: unknown) => {
@@ -724,4 +725,4 @@ console.log(comment.readyMessage());
 
 console.log(`🚀 Kitty Server is running on https://${HOST}:${PORT}`);
 
-//blogger.runOnceNow();
+// blogger.runOnceNow();
