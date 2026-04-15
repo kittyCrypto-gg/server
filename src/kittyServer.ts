@@ -706,6 +706,25 @@ server.app.post("/website/manifest/update",
     )
 );
 
+server.app.get("/notices",
+    async (_req: Request, res: Response) => {
+        try {
+            const ntcs = await helpers.readNtcs();
+
+            res.setHeader("Cache-Control", "no-store");
+
+            if (ntcs === null) {
+                res.status(200).json([]);
+                return;
+            }
+
+            res.status(200).json(ntcs);
+        } catch (error) {
+            console.error("❌ /notices failed:", error);
+            res.status(500).json([]);
+        }
+    });
+
 server.app.get("/status",
     (_req: Request, res: Response) => {
         res.status(200).json({
