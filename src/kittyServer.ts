@@ -5,6 +5,7 @@ import express, { Request, Response } from "express";
 import * as helpers from "./serverHelpers";
 import { tokenStore } from "./tokenStore";
 import rateLimiter from "./rateLimiter";
+import RssComment from "./rssComments";
 import { VisitsStore } from "./visits";
 import { renderPage } from "./render";
 import Server from "./baseServer";
@@ -27,6 +28,8 @@ const clients: types.SseClient[] = [];
 const imageTransformer = new ImageTransformer.ImageTransformer();
 const chat_json_path = path.resolve(process.cwd(), "data", "chat.gcm.json");
 const comments_json_path = path.resolve(process.cwd(), "data", "comments.json");
+const rss_comments_json_path = path.resolve(process.cwd(), "data", "rssComments.json");
+
 const allowedOrigins = [
     "https://kittycrypto.gg",
     "https://nojs.kittycrypto.gg",
@@ -95,6 +98,7 @@ TokenStore.init();
 
 const chat = new Chat(server, chat_json_path, TokenStore);
 const comment = new Comment(server, comments_json_path, TokenStore);
+const rssComment = new RssComment(server, rss_comments_json_path, TokenStore);
 
 const allowedSourcesPath = path.resolve(process.cwd(), "data", "allowedSources.json");
 
@@ -741,6 +745,7 @@ void helpers.trackChatChanges(chat_json_path, chat, clients).catch((error: unkno
 
 console.log(chat.readyMessage());
 console.log(comment.readyMessage());
+console.log(rssComment.readyMessage());
 
 console.log(`🚀 Kitty Server is running on https://${HOST}:${PORT}`);
 
