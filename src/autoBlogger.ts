@@ -370,6 +370,7 @@ export class autoBlogger {
     const userPromptBase =
       (this.strings.autoBlogger?.user ??
         `Write a brief, readable Markdown post (with YAML front matter) based on this JSON commit log.` +
+        `\nIf the commit summary starts with !skip, do not include it in the output at all.` +
         `\nThere is no upper bound on the number of commits. Include as many bullet points (or grouped bullets) as needed to cover all relevant changes.` +
         `\nEnsure links to relevant commits that can be clicked and point to GitHub are included (not to the repository, but to the specific commits).` +
         `\nIf multiple commits are related, group them together in the summary and provide links to the biggest commits, not the smallest ones.` +
