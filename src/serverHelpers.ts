@@ -163,13 +163,11 @@ export function sendImgResult(res: Response, result: types.ImgResultShape): void
 }
 
 export function sendImgError(res: Response, err: unknown): void {
-    if (err instanceof ImageTransformer.ImageTransformError) {
-        res.status(err.httpStatus).send(err.message);
-        return;
-    }
+    const body = ImageTransformer.toImageTransformErrorBody(err, {
+        includeStack: process.env.NODE_ENV !== "production"
+    });
 
-    const message = err instanceof Error ? err.message : "Unknown error";
-    res.status(500).send(message);
+    res.status(body.error.httpStatus).json(body);
 }
 
 function createInitialChatbotDoc(): ChatbotDoc {

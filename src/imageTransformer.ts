@@ -1,8 +1,7 @@
 import { decode as decodePng, encode as encodePng } from "@cf-wasm/png";
-import { decode as decodeJpeg, encode as encodeJpeg } from "@jsquash/jpeg";
+import * as jpeg from "jpeg-js";
 import { parseGIF, decompressFrames } from "gifuct-js";
 import { join, posix as pathPosix } from "node:path";
-import resizeRgba from "@jsquash/resize";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { GifReader } from "omggif";
@@ -24,82 +23,8 @@ const EXTRASOURCES_PATH = "./data/extra_sources.json";
 
 const IMAGE_CACHE_DIR = "./data/images";
 const IMAGE_CACHE_INDEX_PATH = "./data/images/index.json";
-const IMAGE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-
-async function isAllowedImageSourceUrl(u: URL): Promise<boolean> {
-  if (u.protocol !== "https:") return false;
-
-  const host = u.hostname.toLowerCase();
-  if (host.endsWith(".kittycrypto.gg")) return true;
-
-  const allowedHosts = new Set<string>();
-  for (const h of ALLOWED_IMAGE_SOURCE_HOSTS) allowedHosts.add(h.toLowerCase());
-
-  const extraHosts = await readExtraSourceHosts();
-  for (const h of extraHosts) allowedHosts.add(h);
-
-  return allowedHosts.has(host);
-}
-
-async function readExtraSourceHosts(): Promise<Set<string>> {
-  const ensureEmptyFile = async (): Promise<Set<string>> => {
-    try {
-      await fs.promises.writeFile(EXTRASOURCES_PATH, "{}", "utf-8");
-      return new Set<string>();
-    } catch (e) {
-      console.error(`Failed to create ${EXTRASOURCES_PATH}:`, e);
-      throw new ImageTransformError("INTERNAL", 500, "Internal error");
-    }
-  };
-
-  const backupCorruptFile = async (): Promise<void> => {
-    const safeStamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const backupPath = `${EXTRASOURCES_PATH}.bak-${safeStamp}`;
-
-    try {
-      await fs.promises.rename(EXTRASOURCES_PATH, backupPath);
-    } catch (e) {
-      console.error(`Failed to back up corrupt ${EXTRASOURCES_PATH}:`, e);
-      throw new ImageTransformError("INTERNAL", 500, "Internal error");
-    }
-  };
-
-  let raw: string;
-  try {
-    raw = await fs.promises.readFile(EXTRASOURCES_PATH, "utf-8");
-  } catch (e: unknown) {
-    const code = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
-    if (code === "ENOENT") return ensureEmptyFile();
-
-    console.error(`Failed to read ${EXTRASOURCES_PATH}:`, e);
-    throw new ImageTransformError("INTERNAL", 500, "Internal error");
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    await backupCorruptFile();
-    return ensureEmptyFile();
-  }
-
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    await backupCorruptFile();
-    return ensureEmptyFile();
-  }
-
-  const obj = parsed as Record<string, unknown>;
-  const hosts = new Set<string>();
-
-  for (const value of Object.values(obj)) {
-    if (typeof value === "string") {
-      const candidate = value.trim().toLowerCase();
-      if (candidate.length > 0) hosts.add(candidate);
-    }
-  }
-
-  return hosts;
-}
+const IMAGE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const IMAGE_CACHE_SCHEMA_VERSION = "v4";
 
 export type SupportedFormat =
   | "svg"
@@ -138,7 +63,6 @@ export type TransformRemoteUrlInput = {
   srcFormatHint?: SupportedFormat;
   resize?: ResizeSpec;
   requestHeaders?: Record<string, string>;
-
   nocache?: boolean;
   refresh?: boolean;
 };
@@ -179,18 +103,131 @@ export type TransformErrorCode =
   | "PAYLOAD_TOO_LARGE"
   | "IMAGE_TOO_LARGE"
   | "DECODE_FAILED"
+  | "TRANSFORM_FAILED"
   | "ENCODE_FAILED"
   | "INTERNAL";
+
+export type TransformErrorStage =
+  | "parse-source-url"
+  | "validate-source-url"
+  | "read-allowlist"
+  | "fetch-source"
+  | "read-source-body"
+  | "detect-source-format"
+  | "cache"
+  | "pass-through"
+  | "decode"
+  | "transform"
+  | "encode"
+  | "internal";
+
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export type ImageTransformErrorDetails = Record<string, JsonValue>;
+
+type UnknownErrorSummary = {
+  name: string;
+  message: string;
+  code?: string;
+  errno?: number;
+  syscall?: string;
+  hostname?: string;
+  address?: string;
+  port?: number;
+  stack?: string;
+  cause?: UnknownErrorSummary;
+};
+
+export type ImageTransformErrorBody = {
+  ok: false;
+  error: {
+    code: TransformErrorCode;
+    httpStatus: number;
+    message: string;
+    stage: TransformErrorStage;
+    details: ImageTransformErrorDetails;
+    cause?: UnknownErrorSummary;
+  };
+};
 
 export class ImageTransformError extends Error {
   public readonly code: TransformErrorCode;
   public readonly httpStatus: number;
+  public readonly stage: TransformErrorStage;
+  public readonly details: ImageTransformErrorDetails;
+  public readonly causeValue?: unknown;
 
-  public constructor(code: TransformErrorCode, httpStatus: number, message: string) {
-    super(message);
-    this.code = code;
-    this.httpStatus = httpStatus;
+  public constructor(args: {
+    code: TransformErrorCode;
+    httpStatus: number;
+    message: string;
+    stage: TransformErrorStage;
+    details?: ImageTransformErrorDetails;
+    cause?: unknown;
+  }) {
+    super(args.message);
+    Object.setPrototypeOf(this, new.target.prototype);
+
+    this.name = "ImageTransformError";
+    this.code = args.code;
+    this.httpStatus = args.httpStatus;
+    this.stage = args.stage;
+    this.details = args.details ?? {};
+    this.causeValue = args.cause;
   }
+
+  public toBody(options?: { includeStack?: boolean }): ImageTransformErrorBody {
+    const body: ImageTransformErrorBody = {
+      ok: false,
+      error: {
+        code: this.code,
+        httpStatus: this.httpStatus,
+        message: this.message,
+        stage: this.stage,
+        details: this.details,
+      },
+    };
+
+    if (this.causeValue !== undefined) {
+      body.error.cause = summariseUnknownError(this.causeValue, Boolean(options?.includeStack));
+    }
+
+    return body;
+  }
+}
+
+export function toImageTransformErrorBody(
+  error: unknown,
+  options?: { includeStack?: boolean },
+): ImageTransformErrorBody {
+  if (error instanceof ImageTransformError) {
+    return error.toBody(options);
+  }
+
+  return {
+    ok: false,
+    error: {
+      code: "INTERNAL",
+      httpStatus: 500,
+      message: "Unexpected image transform failure",
+      stage: "internal",
+      details: {},
+      cause: summariseUnknownError(error, Boolean(options?.includeStack)),
+    },
+  };
+}
+
+export function createImageTransformErrorBody(args: {
+  code: TransformErrorCode;
+  httpStatus: number;
+  message: string;
+  stage: TransformErrorStage;
+  details?: ImageTransformErrorDetails;
+  cause?: unknown;
+  includeStack?: boolean;
+}): ImageTransformErrorBody {
+  const error = new ImageTransformError(args);
+  return error.toBody({ includeStack: args.includeStack });
 }
 
 type ResvgRenderOptions = {
@@ -216,7 +253,6 @@ type ResvgStatic = {
   async(svg: string, options?: ResvgRenderOptions): Promise<ResvgInstance>;
 };
 
-// Resvg import is ts-ignored, so give it a safe shape without using `any`.
 const ResvgTyped = Resvg as unknown as ResvgStatic;
 
 type CacheIndexEntry = {
@@ -230,6 +266,181 @@ type CacheIndexEntry = {
 };
 
 type CacheIndex = Record<string, CacheIndexEntry>;
+
+type ErrorRecord = Record<string, unknown>;
+
+type SvgIntrinsicSize = {
+  width?: number;
+  height?: number;
+  viewBox?: { w: number; h: number };
+};
+
+function summariseUnknownError(error: unknown, includeStack: boolean, depth = 0): UnknownErrorSummary {
+  if (depth > 4) {
+    return {
+      name: "CauseChainTruncated",
+      message: "Nested cause chain truncated",
+    };
+  }
+
+  if (!(error instanceof Error)) {
+    return {
+      name: typeof error,
+      message: String(error),
+    };
+  }
+
+  const record = error as unknown as ErrorRecord;
+  const summary: UnknownErrorSummary = {
+    name: error.name || "Error",
+    message: error.message || "Unknown error",
+  };
+
+  const code = readStringField(record, "code");
+  if (code) summary.code = code;
+
+  const errno = readNumberField(record, "errno");
+  if (errno !== null) summary.errno = errno;
+
+  const syscall = readStringField(record, "syscall");
+  if (syscall) summary.syscall = syscall;
+
+  const hostname = readStringField(record, "hostname");
+  if (hostname) summary.hostname = hostname;
+
+  const address = readStringField(record, "address");
+  if (address) summary.address = address;
+
+  const port = readNumberField(record, "port");
+  if (port !== null) summary.port = port;
+
+  if (includeStack && error.stack) {
+    summary.stack = error.stack;
+  }
+
+  if (record.cause !== undefined) {
+    summary.cause = summariseUnknownError(record.cause, includeStack, depth + 1);
+  }
+
+  return summary;
+}
+
+function readStringField(record: ErrorRecord, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function readNumberField(record: ErrorRecord, key: string): number | null {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+async function isAllowedImageSourceUrl(u: URL): Promise<boolean> {
+  if (u.protocol !== "https:") return false;
+
+  const host = u.hostname.toLowerCase();
+  if (host.endsWith(".kittycrypto.gg")) return true;
+
+  const allowedHosts = new Set<string>();
+  for (const h of ALLOWED_IMAGE_SOURCE_HOSTS) allowedHosts.add(h.toLowerCase());
+
+  const extraHosts = await readExtraSourceHosts();
+  for (const h of extraHosts) allowedHosts.add(h);
+
+  return allowedHosts.has(host);
+}
+
+async function readExtraSourceHosts(): Promise<Set<string>> {
+  const ensureEmptyFile = async (): Promise<Set<string>> => {
+    try {
+      await fs.promises.writeFile(EXTRASOURCES_PATH, "{}", "utf-8");
+      return new Set<string>();
+    } catch (error) {
+      console.error(`Failed to create ${EXTRASOURCES_PATH}:`, error);
+      throw new ImageTransformError({
+        code: "INTERNAL",
+        httpStatus: 500,
+        message: "Failed to initialise extra image source allowlist",
+        stage: "read-allowlist",
+        details: {
+          path: EXTRASOURCES_PATH,
+          action: "create-empty-file",
+        },
+        cause: error,
+      });
+    }
+  };
+
+  const backupCorruptFile = async (): Promise<void> => {
+    const safeStamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = `${EXTRASOURCES_PATH}.bak-${safeStamp}`;
+
+    try {
+      await fs.promises.rename(EXTRASOURCES_PATH, backupPath);
+    } catch (error) {
+      console.error(`Failed to back up corrupt ${EXTRASOURCES_PATH}:`, error);
+      throw new ImageTransformError({
+        code: "INTERNAL",
+        httpStatus: 500,
+        message: "Failed to back up corrupt extra image source allowlist",
+        stage: "read-allowlist",
+        details: {
+          path: EXTRASOURCES_PATH,
+          backupPath,
+          action: "backup-corrupt-file",
+        },
+        cause: error,
+      });
+    }
+  };
+
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(EXTRASOURCES_PATH, "utf-8");
+  } catch (error: unknown) {
+    const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+    if (code === "ENOENT") return ensureEmptyFile();
+
+    console.error(`Failed to read ${EXTRASOURCES_PATH}:`, error);
+    throw new ImageTransformError({
+      code: "INTERNAL",
+      httpStatus: 500,
+      message: "Failed to read extra image source allowlist",
+      stage: "read-allowlist",
+      details: {
+        path: EXTRASOURCES_PATH,
+        action: "read-file",
+      },
+      cause: error,
+    });
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    await backupCorruptFile();
+    console.error(`Corrupt ${EXTRASOURCES_PATH} was reset:`, error);
+    return ensureEmptyFile();
+  }
+
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    await backupCorruptFile();
+    return ensureEmptyFile();
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const hosts = new Set<string>();
+
+  for (const value of Object.values(obj)) {
+    if (typeof value !== "string") continue;
+
+    const candidate = value.trim().toLowerCase();
+    if (candidate.length > 0) hosts.add(candidate);
+  }
+
+  return hosts;
+}
 
 export class ImageTransformer {
   private readonly limits: TransformerLimits;
@@ -247,32 +458,46 @@ export class ImageTransformer {
   }
 
   public async transformRemoteUrl(input: TransformRemoteUrlInput): Promise<TransformResult> {
-    const srcUrl = this.resolveSrcUrl(input.src, input.baseUrl);
+    const srcUrl = this.resolveSrcUrlWithDetail(input.src, input.baseUrl);
 
-    if (!(await isAllowedImageSourceUrl(srcUrl))) {
-      throw new ImageTransformError(
-        "BAD_REQUEST",
-        403,
-        `Source not allowed: ${srcUrl.hostname}`,
-      );
+    let sourceAllowed = false;
+    try {
+      sourceAllowed = await isAllowedImageSourceUrl(srcUrl);
+    } catch (error) {
+      if (error instanceof ImageTransformError) throw error;
+
+      throw new ImageTransformError({
+        code: "INTERNAL",
+        httpStatus: 500,
+        message: "Failed while validating image source URL",
+        stage: "validate-source-url",
+        details: this.sourceDetails(srcUrl),
+        cause: error,
+      });
+    }
+
+    if (!sourceAllowed) {
+      throw new ImageTransformError({
+        code: "BAD_REQUEST",
+        httpStatus: 403,
+        message: `Source not allowed: ${srcUrl.hostname}`,
+        stage: "validate-source-url",
+        details: {
+          ...this.sourceDetails(srcUrl),
+          reason: "The source host is not present in the image source allowlist",
+        },
+      });
     }
 
     const resizeSpec = input.resize ?? {};
     const wantsResize = Boolean(resizeSpec.width || resizeSpec.height);
+    const response = await this.fetchRemoteSource(srcUrl, input.requestHeaders);
+    const srcBytes = await this.readResponseBytes(response, srcUrl);
 
-    const response = await fetch(srcUrl.toString(), {
-      headers: {
-        Accept: "image/*,application/octet-stream;q=0.9,*/*;q=0.1",
-        ...(input.requestHeaders ?? {}),
-      },
+    this.assertByteBudget(srcBytes.byteLength, {
+      stage: "read-source-body",
+      ...this.sourceDetails(srcUrl),
     });
-
-    if (!response.ok) {
-      throw new ImageTransformError("FETCH_FAILED", 502, `Failed to fetch src (${response.status})`);
-    }
-
-    const srcBytes = new Uint8Array(await response.arrayBuffer());
-    this.assertByteBudget(srcBytes.byteLength);
 
     const detectedSrcFormat =
       input.srcFormatHint ??
@@ -281,15 +506,22 @@ export class ImageTransformer {
       this.detectFormatFromMagicBytes(srcBytes);
 
     if (!detectedSrcFormat) {
-      throw new ImageTransformError(
-        "BAD_REQUEST",
-        400,
-        "Could not determine source format. Provide srcFormatHint=png|jpg|svg|...|webp",
-      );
+      throw new ImageTransformError({
+        code: "BAD_REQUEST",
+        httpStatus: 400,
+        message: "Could not determine source image format",
+        stage: "detect-source-format",
+        details: {
+          ...this.sourceDetails(srcUrl),
+          contentType: response.headers.get("content-type") ?? null,
+          byteLength: srcBytes.byteLength,
+          firstBytesHex: this.firstBytesHex(srcBytes),
+          suggestion: "Provide srcFormatHint=png|jpg|svg|gif|bmp|tif|tiff|webp",
+        },
+      });
     }
 
     const outputFormat = input.format ?? detectedSrcFormat;
-
     const isPassThroughWebp = detectedSrcFormat === "webp";
     const isPassThroughGif = detectedSrcFormat === "gif" && outputFormat === "gif" && !wantsResize;
 
@@ -319,7 +551,6 @@ export class ImageTransformer {
     const decoded = await this.decodeImage(detectedSrcFormat, srcBytes);
     const resized = await this.transform(decoded, resizeSpec, outputFormat);
     const encoded = await this.encodeOutput(resized, outputFormat);
-
     const size = this.getDecodedSize(resized);
 
     const result: TransformResult = {
@@ -345,9 +576,12 @@ export class ImageTransformer {
   }
 
   public async transformBytes(input: TransformBytesInput): Promise<TransformResult> {
-    this.assertByteBudget(input.bytes.byteLength);
+    this.assertByteBudget(input.bytes.byteLength, {
+      stage: "read-source-body",
+      source: "bytes-input",
+    });
 
-    const urlHint = input.originalUrlHint ? new URL(input.originalUrlHint) : null;
+    const urlHint = this.parseOptionalUrlHint(input.originalUrlHint);
 
     const detectedSrcFormat =
       input.srcFormatHint ??
@@ -356,11 +590,20 @@ export class ImageTransformer {
       this.detectFormatFromMagicBytes(input.bytes);
 
     if (!detectedSrcFormat) {
-      throw new ImageTransformError(
-        "BAD_REQUEST",
-        400,
-        "Could not determine source format. Provide srcFormatHint=png|jpg|svg|...|webp",
-      );
+      throw new ImageTransformError({
+        code: "BAD_REQUEST",
+        httpStatus: 400,
+        message: "Could not determine source image format",
+        stage: "detect-source-format",
+        details: {
+          source: "bytes-input",
+          originalUrlHint: input.originalUrlHint ?? null,
+          contentTypeHint: input.contentTypeHint ?? null,
+          byteLength: input.bytes.byteLength,
+          firstBytesHex: this.firstBytesHex(input.bytes),
+          suggestion: "Provide srcFormatHint=png|jpg|svg|gif|bmp|tif|tiff|webp",
+        },
+      });
     }
 
     const outputFormat = input.format ?? detectedSrcFormat;
@@ -381,7 +624,6 @@ export class ImageTransformer {
     const decoded = await this.decodeImage(detectedSrcFormat, input.bytes);
     const resized = await this.transform(decoded, resizeSpec, outputFormat);
     const encoded = await this.encodeOutput(resized, outputFormat);
-
     const size = this.getDecodedSize(resized);
 
     return {
@@ -394,6 +636,105 @@ export class ImageTransformer {
     };
   }
 
+  private resolveSrcUrlWithDetail(src: string, baseUrl?: string): URL {
+    try {
+      return this.resolveSrcUrl(src, baseUrl);
+    } catch (error) {
+      throw new ImageTransformError({
+        code: "BAD_REQUEST",
+        httpStatus: 400,
+        message: "Invalid image source URL",
+        stage: "parse-source-url",
+        details: {
+          src,
+          baseUrl: baseUrl ?? null,
+        },
+        cause: error,
+      });
+    }
+  }
+
+  private parseOptionalUrlHint(originalUrlHint?: string): URL | null {
+    if (!originalUrlHint) return null;
+
+    try {
+      return new URL(originalUrlHint);
+    } catch (error) {
+      throw new ImageTransformError({
+        code: "BAD_REQUEST",
+        httpStatus: 400,
+        message: "Invalid originalUrlHint",
+        stage: "parse-source-url",
+        details: {
+          originalUrlHint,
+        },
+        cause: error,
+      });
+    }
+  }
+
+  private async fetchRemoteSource(srcUrl: URL, requestHeaders?: Record<string, string>): Promise<Response> {
+    const acceptHeader = "image/*,application/octet-stream;q=0.9,*/*;q=0.1";
+
+    let response: Response;
+    try {
+      response = await fetch(srcUrl.toString(), {
+        headers: {
+          Accept: acceptHeader,
+          ...(requestHeaders ?? {}),
+        },
+      });
+    } catch (error) {
+      throw new ImageTransformError({
+        code: "FETCH_FAILED",
+        httpStatus: 502,
+        message: "Network fetch failed before a response was received",
+        stage: "fetch-source",
+        details: {
+          ...this.sourceDetails(srcUrl),
+          requestAccept: acceptHeader,
+        },
+        cause: error,
+      });
+    }
+
+    if (response.ok) return response;
+
+    throw new ImageTransformError({
+      code: "FETCH_FAILED",
+      httpStatus: 502,
+      message: `Source server returned HTTP ${response.status}`,
+      stage: "fetch-source",
+      details: {
+        ...this.sourceDetails(srcUrl),
+        responseUrl: response.url || srcUrl.toString(),
+        responseStatus: response.status,
+        responseStatusText: response.statusText,
+        responseHeaders: this.headersToJsonObject(response.headers),
+      },
+    });
+  }
+
+  private async readResponseBytes(response: Response, srcUrl: URL): Promise<Uint8Array> {
+    try {
+      return new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+      throw new ImageTransformError({
+        code: "FETCH_FAILED",
+        httpStatus: 502,
+        message: "Fetched source but failed while reading response body",
+        stage: "read-source-body",
+        details: {
+          ...this.sourceDetails(srcUrl),
+          responseUrl: response.url || srcUrl.toString(),
+          responseStatus: response.status,
+          responseHeaders: this.headersToJsonObject(response.headers),
+        },
+        cause: error,
+      });
+    }
+  }
+
   private passThroughWebp(
     input: { format?: SupportedFormat; resize?: ResizeSpec },
     bytes: Uint8Array,
@@ -401,12 +742,33 @@ export class ImageTransformer {
   ): TransformResult {
     const requestedFormat = input.format ?? detectedSrcFormat;
     if (requestedFormat !== "webp") {
-      throw new ImageTransformError("UNSUPPORTED_FORMAT", 400, "webp can only be returned as webp");
+      throw new ImageTransformError({
+        code: "UNSUPPORTED_FORMAT",
+        httpStatus: 400,
+        message: "webp can only be returned as webp",
+        stage: "pass-through",
+        details: {
+          detectedSrcFormat,
+          requestedFormat,
+          reason: "webp decoding and conversion are not supported by this transformer",
+        },
+      });
     }
 
     const wantsResize = Boolean(input.resize?.width || input.resize?.height);
     if (wantsResize) {
-      throw new ImageTransformError("UNSUPPORTED_FORMAT", 400, "webp cannot be resized or transformed");
+      throw new ImageTransformError({
+        code: "UNSUPPORTED_FORMAT",
+        httpStatus: 400,
+        message: "webp cannot be resized or transformed",
+        stage: "pass-through",
+        details: {
+          detectedSrcFormat,
+          requestedFormat,
+          resize: this.resizeSpecDetails(input.resize ?? {}),
+          reason: "webp is currently pass-through only",
+        },
+      });
     }
 
     return {
@@ -426,32 +788,67 @@ export class ImageTransformer {
   ): TransformResult {
     const requestedFormat = input.format ?? detectedSrcFormat;
     if (requestedFormat !== "gif") {
-      throw new ImageTransformError("UNSUPPORTED_FORMAT", 400, "Internal: expected gif pass-through");
+      throw new ImageTransformError({
+        code: "UNSUPPORTED_FORMAT",
+        httpStatus: 400,
+        message: "Internal: expected gif pass-through",
+        stage: "pass-through",
+        details: {
+          detectedSrcFormat,
+          requestedFormat,
+        },
+      });
     }
 
     const wantsResize = Boolean(input.resize?.width || input.resize?.height);
     if (wantsResize) {
-      throw new ImageTransformError(
-        "UNSUPPORTED_FORMAT",
-        400,
-        "Animated gif cannot be resized or transformed when output is gif",
-      );
+      throw new ImageTransformError({
+        code: "UNSUPPORTED_FORMAT",
+        httpStatus: 400,
+        message: "Animated gif cannot be resized or transformed when output is gif",
+        stage: "pass-through",
+        details: {
+          detectedSrcFormat,
+          requestedFormat,
+          resize: this.resizeSpecDetails(input.resize ?? {}),
+        },
+      });
     }
 
-    const reader = new GifReader(Buffer.from(bytes));
+    try {
+      const reader = new GifReader(Buffer.from(bytes));
 
-    return {
-      body: bytes,
-      contentType: "image/gif",
-      outputFormat: "gif",
-      detectedSrcFormat: "gif",
-      width: reader.width,
-      height: reader.height,
-    };
+      return {
+        body: bytes,
+        contentType: "image/gif",
+        outputFormat: "gif",
+        detectedSrcFormat: "gif",
+        width: reader.width,
+        height: reader.height,
+      };
+    } catch (error) {
+      throw new ImageTransformError({
+        code: "DECODE_FAILED",
+        httpStatus: 400,
+        message: "GIF pass-through failed while reading GIF dimensions",
+        stage: "pass-through",
+        details: {
+          detectedSrcFormat,
+          requestedFormat,
+          byteLength: bytes.byteLength,
+          firstBytesHex: this.firstBytesHex(bytes),
+        },
+        cause: error,
+      });
+    }
   }
 
   private getDecodedSize(image: DecodedImage): { width: number; height: number } {
-    if (image.kind === "svg") return { width: 0, height: 0 };
+    if (image.kind === "svg") {
+      const intrinsic = this.getSvgIntrinsicSize(image.svgText);
+      return this.getSvgBaseSize(intrinsic);
+    }
+
     return { width: image.width, height: image.height };
   }
 
@@ -460,20 +857,54 @@ export class ImageTransformer {
     return base ? new URL(src, base) : new URL(src);
   }
 
-  private assertByteBudget(byteLength: number): void {
+  private assertByteBudget(byteLength: number, details: ImageTransformErrorDetails): void {
     if (byteLength <= this.limits.maxSrcBytes) return;
-    throw new ImageTransformError("PAYLOAD_TOO_LARGE", 400, "src is too large");
+
+    throw new ImageTransformError({
+      code: "PAYLOAD_TOO_LARGE",
+      httpStatus: 400,
+      message: "Source image is too large",
+      stage: "read-source-body",
+      details: {
+        ...details,
+        byteLength,
+        maxSrcBytes: this.limits.maxSrcBytes,
+      },
+    });
   }
 
   private assertPixelBudget(w: number, h: number): void {
     const pixels = w * h;
     if (pixels <= this.limits.maxPixels) return;
-    throw new ImageTransformError("IMAGE_TOO_LARGE", 400, `Image too large: ${w}x${h} (${pixels} pixels)`);
+
+    throw new ImageTransformError({
+      code: "IMAGE_TOO_LARGE",
+      httpStatus: 400,
+      message: `Image too large: ${w}x${h} (${pixels} pixels)`,
+      stage: "decode",
+      details: {
+        width: w,
+        height: h,
+        pixels,
+        maxPixels: this.limits.maxPixels,
+      },
+    });
   }
 
   private assertSupportedFormat(format: string, side: "input" | "output"): void {
     if (this.isSupportedFormat(format)) return;
-    throw new ImageTransformError("UNSUPPORTED_FORMAT", 400, `Unsupported ${side} format: ${format}`);
+
+    throw new ImageTransformError({
+      code: "UNSUPPORTED_FORMAT",
+      httpStatus: 400,
+      message: `Unsupported ${side} format: ${format}`,
+      stage: side === "input" ? "decode" : "encode",
+      details: {
+        side,
+        format,
+        supportedFormats: ["svg", "png", "gif", "bmp", "jpg", "jpeg", "tif", "tiff", "webp"],
+      },
+    });
   }
 
   private normaliseFormat(value: string | null): SupportedFormat | null {
@@ -532,7 +963,7 @@ export class ImageTransformer {
   }
 
   private detectFormatFromUrl(u: URL): SupportedFormat | null {
-    const ext = pathPosix.extname(u.pathname).toLowerCase(); // includes leading "."
+    const ext = pathPosix.extname(u.pathname).toLowerCase();
     if (!ext) return null;
     return this.normaliseFormat(ext.slice(1));
   }
@@ -602,13 +1033,26 @@ export class ImageTransformer {
         case "webp":
           throw new Error("Internal: webp should be passed through without decoding");
       }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Unknown decode error";
-      throw new ImageTransformError("DECODE_FAILED", 400, message);
+    } catch (error) {
+      if (error instanceof ImageTransformError) throw error;
+
+      const message = error instanceof Error ? error.message : "Unknown decode error";
+      throw new ImageTransformError({
+        code: "DECODE_FAILED",
+        httpStatus: 400,
+        message: `Decode failed while decoding ${format}: ${message}`,
+        stage: "decode",
+        details: {
+          format,
+          byteLength: bytes.byteLength,
+          firstBytesHex: this.firstBytesHex(bytes),
+        },
+        cause: error,
+      });
     }
   }
 
-  private expandToRgba(raw: Uint8Array, width: number, height: number): Uint8Array {
+  private expandToRgba(raw: Uint8Array, width: number, height: number, format: SupportedFormat): Uint8Array {
     const pixels = width * height;
     const expected = pixels * 4;
 
@@ -649,15 +1093,40 @@ export class ImageTransformer {
       return out;
     }
 
-    throw new ImageTransformError(
-      "DECODE_FAILED",
-      400,
-      `PNG decode returned unexpected pixel data length: ${raw.length} for ${width}x${height}`,
-    );
+    throw new ImageTransformError({
+      code: "DECODE_FAILED",
+      httpStatus: 400,
+      message: `${format.toUpperCase()} decode returned unexpected pixel data length`,
+      stage: "decode",
+      details: {
+        format,
+        rawLength: raw.length,
+        expectedRgbaLength: expected,
+        width,
+        height,
+      },
+    });
   }
 
   private async decodePngToRgba(bytes: Uint8Array): Promise<RasterImage> {
-    const decoded = decodePng(bytes);
+    let decoded: { image: unknown; width: number; height: number };
+
+    try {
+      decoded = decodePng(bytes);
+    } catch (error) {
+      throw new ImageTransformError({
+        code: "DECODE_FAILED",
+        httpStatus: 400,
+        message: "PNG decoder failed",
+        stage: "decode",
+        details: {
+          format: "png",
+          byteLength: bytes.byteLength,
+          firstBytesHex: this.firstBytesHex(bytes),
+        },
+        cause: error,
+      });
+    }
 
     const raw = (() => {
       const img = decoded.image;
@@ -667,51 +1136,121 @@ export class ImageTransformer {
       }
 
       if ((img as unknown) instanceof ArrayBuffer) {
-        return new Uint8Array(img);
+        return new Uint8Array(img as ArrayBuffer);
       }
 
-      throw new ImageTransformError("DECODE_FAILED", 400, "PNG decode returned unsupported pixel buffer type");
+      throw new ImageTransformError({
+        code: "DECODE_FAILED",
+        httpStatus: 400,
+        message: "PNG decode returned unsupported pixel buffer type",
+        stage: "decode",
+        details: {
+          format: "png",
+          width: decoded.width,
+          height: decoded.height,
+          returnedType: typeof img,
+        },
+      });
     })();
 
     this.assertPixelBudget(decoded.width, decoded.height);
 
-    const rgba = this.expandToRgba(raw, decoded.width, decoded.height);
+    const rgba = this.expandToRgba(raw, decoded.width, decoded.height, "png");
     return { kind: "raster", width: decoded.width, height: decoded.height, rgba };
   }
 
   private async decodeJpegToRgba(bytes: Uint8Array): Promise<RasterImage> {
-    const ab = this.toExactArrayBuffer(bytes);
-    const decoded = await decodeJpeg(ab);
-    const rgba = new Uint8Array(decoded.data.buffer.slice(0));
-    this.assertPixelBudget(decoded.width, decoded.height);
-    return { kind: "raster", width: decoded.width, height: decoded.height, rgba };
+    try {
+      const decoded = jpeg.decode(Buffer.from(bytes), {
+        useTArray: true,
+      });
+
+      const rgba = this.copyViewToUint8Array(decoded.data);
+      this.assertPixelBudget(decoded.width, decoded.height);
+
+      return { kind: "raster", width: decoded.width, height: decoded.height, rgba };
+    } catch (error) {
+      if (error instanceof ImageTransformError) throw error;
+
+      throw new ImageTransformError({
+        code: "DECODE_FAILED",
+        httpStatus: 400,
+        message: "JPEG decoder failed",
+        stage: "decode",
+        details: {
+          format: "jpeg",
+          byteLength: bytes.byteLength,
+          firstBytesHex: this.firstBytesHex(bytes),
+          decoder: "jpeg-js",
+        },
+        cause: error,
+      });
+    }
   }
 
   private async decodeBmpToRgba(bytes: Uint8Array): Promise<RasterImage> {
-    const bmp = BMP.decode(Buffer.from(bytes));
-    const rgba = new Uint8Array(bmp.data.buffer.slice(0));
-    this.assertPixelBudget(bmp.width, bmp.height);
-    return { kind: "raster", width: bmp.width, height: bmp.height, rgba };
+    try {
+      const bmp = BMP.decode(Buffer.from(bytes));
+      const rgba = this.copyViewToUint8Array(bmp.data);
+      this.assertPixelBudget(bmp.width, bmp.height);
+
+      return { kind: "raster", width: bmp.width, height: bmp.height, rgba };
+    } catch (error) {
+      if (error instanceof ImageTransformError) throw error;
+
+      throw new ImageTransformError({
+        code: "DECODE_FAILED",
+        httpStatus: 400,
+        message: "BMP decoder failed",
+        stage: "decode",
+        details: {
+          format: "bmp",
+          byteLength: bytes.byteLength,
+          firstBytesHex: this.firstBytesHex(bytes),
+        },
+        cause: error,
+      });
+    }
   }
 
   private async decodeTiffToRgba(bytes: Uint8Array): Promise<RasterImage> {
     const ab = this.toExactArrayBuffer(bytes);
-    const ifds = UTIF.decode(ab);
-    if (!ifds.length) throw new Error("TIFF decode produced no images");
 
-    UTIF.decodeImage(ab, ifds[0]);
-    const rgba = UTIF.toRGBA8(ifds[0]) as Uint8Array;
+    try {
+      const ifds = UTIF.decode(ab);
+      if (!ifds.length) throw new Error("TIFF decode produced no images");
 
-    const width = Number(ifds[0].width ?? 0);
-    const height = Number(ifds[0].height ?? 0);
+      UTIF.decodeImage(ab, ifds[0]);
+      const rgba = UTIF.toRGBA8(ifds[0]) as Uint8Array;
 
-    if (!width || !height) throw new Error("TIFF missing width/height");
-    this.assertPixelBudget(width, height);
+      const width = Number(ifds[0].width ?? 0);
+      const height = Number(ifds[0].height ?? 0);
 
-    return { kind: "raster", width, height, rgba };
+      if (!width || !height) throw new Error("TIFF missing width/height");
+      this.assertPixelBudget(width, height);
+
+      return { kind: "raster", width, height, rgba };
+    } catch (error) {
+      if (error instanceof ImageTransformError) throw error;
+
+      throw new ImageTransformError({
+        code: "DECODE_FAILED",
+        httpStatus: 400,
+        message: "TIFF decoder failed",
+        stage: "decode",
+        details: {
+          format: "tiff",
+          byteLength: bytes.byteLength,
+          firstBytesHex: this.firstBytesHex(bytes),
+        },
+        cause: error,
+      });
+    }
   }
 
   private async decodeGifToRgba(bytes: Uint8Array): Promise<RasterImage> {
+    let firstDecoderError: unknown = null;
+
     try {
       const ab = this.toExactArrayBuffer(bytes);
       const parsed = parseGIF(ab);
@@ -728,7 +1267,11 @@ export class ImageTransformer {
       this.blitRgba(canvas, w, h, f0.patch, f0.dims.width, f0.dims.height, f0.dims.left, f0.dims.top);
 
       return { kind: "raster", width: w, height: h, rgba: canvas };
-    } catch {
+    } catch (error) {
+      firstDecoderError = error;
+    }
+
+    try {
       const reader = new GifReader(Buffer.from(bytes));
       const w = reader.width;
       const h = reader.height;
@@ -736,44 +1279,92 @@ export class ImageTransformer {
       const rgba = new Uint8Array(w * h * 4);
       reader.decodeAndBlitFrameRGBA(0, rgba);
       return { kind: "raster", width: w, height: h, rgba };
+    } catch (error) {
+      if (error instanceof ImageTransformError) throw error;
+
+      throw new ImageTransformError({
+        code: "DECODE_FAILED",
+        httpStatus: 400,
+        message: "GIF decode failed with both decoders",
+        stage: "decode",
+        details: {
+          format: "gif",
+          byteLength: bytes.byteLength,
+          firstBytesHex: this.firstBytesHex(bytes),
+          primaryDecoder: "gifuct-js",
+          fallbackDecoder: "omggif",
+          primaryDecoderError: summariseUnknownError(firstDecoderError, false).message,
+        },
+        cause: error,
+      });
     }
   }
 
   private async transform(decoded: DecodedImage, resizeSpec: ResizeSpec, outputFormat: SupportedFormat): Promise<DecodedImage> {
-    const wantsSvg = outputFormat === "svg";
+    try {
+      const wantsSvg = outputFormat === "svg";
 
-    if (wantsSvg && decoded.kind === "raster") {
-      const resizedRaster = await this.resizeRaster(decoded, resizeSpec);
-      return this.rasterToEmbeddedSvg(resizedRaster);
+      if (wantsSvg && decoded.kind === "raster") {
+        const resizedRaster = this.resizeRaster(decoded, resizeSpec);
+        return this.rasterToEmbeddedSvg(resizedRaster);
+      }
+
+      if (decoded.kind === "svg" && wantsSvg) {
+        return { kind: "svg", svgText: this.resizeSvgDocument(decoded.svgText, resizeSpec) };
+      }
+
+      if (decoded.kind === "svg") {
+        const rasterised = await this.decodeSvgToRgba(decoded.svgText);
+        return this.resizeRaster(rasterised, resizeSpec);
+      }
+
+      return this.resizeRaster(decoded, resizeSpec);
+    } catch (error) {
+      if (error instanceof ImageTransformError) throw error;
+
+      throw new ImageTransformError({
+        code: "TRANSFORM_FAILED",
+        httpStatus: 500,
+        message: "Image transform failed",
+        stage: "transform",
+        details: {
+          outputFormat,
+          resize: this.resizeSpecDetails(resizeSpec),
+          sourceKind: decoded.kind,
+          sourceWidth: decoded.kind === "raster" ? decoded.width : 0,
+          sourceHeight: decoded.kind === "raster" ? decoded.height : 0,
+        },
+        cause: error,
+      });
     }
-
-    if (decoded.kind === "svg" && wantsSvg) {
-      return { kind: "svg", svgText: this.stampSvgSize(decoded.svgText, resizeSpec) };
-    }
-
-    if (decoded.kind === "svg") {
-      const intrinsic = this.getSvgIntrinsicSize(decoded.svgText);
-      const target = this.computeTargetSizeFromSvg(intrinsic, resizeSpec);
-
-      this.assertPixelBudget(target.width, target.height);
-
-      const shouldTrimToInk = Boolean(resizeSpec.width || resizeSpec.height);
-
-      const rasterised = await this.rasteriseSvgToRgba(
-        decoded.svgText,
-        target.width,
-        target.height,
-        { trimToInk: shouldTrimToInk }
-      );
-
-      return rasterised;
-    }
-
-    return await this.resizeRaster(decoded, resizeSpec);
   }
 
-  private typeSvgIntrinsicSize(): void {
-    // purely to keep the type near the methods in editors
+  private resizeSvgDocument(svgText: string, resizeSpec: ResizeSpec): string {
+    const wantsResize = Boolean(resizeSpec.width || resizeSpec.height);
+    if (!wantsResize) return svgText;
+
+    const intrinsic = this.getSvgIntrinsicSize(svgText);
+    const base = this.getSvgBaseSize(intrinsic);
+    const target = this.computeTargetSize(base.width, base.height, resizeSpec);
+
+    this.assertPixelBudget(target.width, target.height);
+
+    const normalisedSvg = this.ensureSvgViewBox(svgText, `0 0 ${base.width} ${base.height}`);
+
+    return this.stampSvgSize(normalisedSvg, {
+      width: target.width,
+      height: target.height,
+    });
+  }
+
+  private async decodeSvgToRgba(svgText: string): Promise<RasterImage> {
+    const intrinsic = this.getSvgIntrinsicSize(svgText);
+    const base = this.getSvgBaseSize(intrinsic);
+
+    this.assertPixelBudget(base.width, base.height);
+
+    const normalisedSvg = this.ensureSvgViewBox(svgText, `0 0 ${base.width} ${base.height}`);
+    return await this.rasteriseSvgToRgba(normalisedSvg, base.width, base.height);
   }
 
   private getSvgIntrinsicSize(svgText: string): SvgIntrinsicSize {
@@ -790,29 +1381,20 @@ export class ImageTransformer {
     };
   }
 
-  private computeTargetSizeFromSvg(intrinsic: SvgIntrinsicSize, spec: ResizeSpec): { width: number; height: number } {
-    const base = this.getSvgBaseSize(intrinsic);
-
-    const w = spec.width;
-    const h = spec.height;
-
-    if (w && h) return { width: w, height: h };
-
-    if (w) {
-      const scaledH = Math.max(1, Math.round((base.height * w) / base.width));
-      return { width: w, height: scaledH };
-    }
-
-    if (h) {
-      const scaledW = Math.max(1, Math.round((base.width * h) / base.height));
-      return { width: scaledW, height: h };
-    }
-
-    return base;
-  }
-
   private getSvgBaseSize(intrinsic: SvgIntrinsicSize): { width: number; height: number } {
-    if (intrinsic.width && intrinsic.height) return { width: intrinsic.width, height: intrinsic.height };
+    if (intrinsic.width && intrinsic.height) {
+      return { width: intrinsic.width, height: intrinsic.height };
+    }
+
+    if (intrinsic.width && intrinsic.viewBox?.w && intrinsic.viewBox?.h) {
+      const height = Math.max(1, Math.round((intrinsic.viewBox.h * intrinsic.width) / intrinsic.viewBox.w));
+      return { width: intrinsic.width, height };
+    }
+
+    if (intrinsic.height && intrinsic.viewBox?.w && intrinsic.viewBox?.h) {
+      const width = Math.max(1, Math.round((intrinsic.viewBox.w * intrinsic.height) / intrinsic.viewBox.h));
+      return { width, height: intrinsic.height };
+    }
 
     if (intrinsic.viewBox?.w && intrinsic.viewBox?.h) {
       return {
@@ -825,7 +1407,7 @@ export class ImageTransformer {
   }
 
   private getAttr(svgText: string, name: string): string | null {
-    const re = new RegExp(`<svg\\b[^>]*\\s${name}="([^"]+)"`, "i");
+    const re = new RegExp(`<svg\\b[^>]*\\s${name}\\s*=\\s*["']([^"']+)["']`, "i");
     const m = svgText.match(re);
     return m?.[1] ?? null;
   }
@@ -852,7 +1434,20 @@ export class ImageTransformer {
     return Number.isFinite(n) && n > 0 ? n : null;
   }
 
-  private async rasteriseSvgToRgba(svgText: string, width: number, height: number, options?: { trimToInk?: boolean }): Promise<RasterImage> {
+  private ensureSvgViewBox(svgText: string, viewBox: string): string {
+    const hasViewBox = /\sviewBox\s*=\s*["'][^"']+["']/i.test(svgText);
+    if (hasViewBox) return svgText;
+
+    return svgText.replace(/<svg\b([^>]*)>/i, (full, attrs: string) => {
+      return `<svg${attrs} viewBox="${viewBox}">`;
+    });
+  }
+
+  private async rasteriseSvgToRgba(
+    svgText: string,
+    width: number,
+    height: number,
+  ): Promise<RasterImage> {
     const stamped = this.stampSvgSize(svgText, { width, height });
 
     const fontPath = join(process.cwd(), "data", "fonts", "LiberationSans.ttf");
@@ -869,7 +1464,6 @@ export class ImageTransformer {
       font: {
         loadSystemFonts: false,
         fontBuffers: [fontBytes],
-
         defaultFontFamily: "Liberation Sans",
         sansSerifFamily: "Liberation Sans",
         serifFamily: "Liberation Sans",
@@ -882,7 +1476,7 @@ export class ImageTransformer {
     const raster = await this.decodePngToRgba(pngBytes);
 
     if (raster.width === width && raster.height === height) return raster;
-    return await this.resizeRaster(raster, { width, height });
+    return this.resizeRaster(raster, { width, height });
   }
 
   private injectTextFallbackCss(svgText: string, family: string): string {
@@ -895,32 +1489,70 @@ export class ImageTransformer {
     return svgText.replace(/<svg\b([^>]*)>/i, (full, attrs: string) => `<svg${attrs}>${styleTag}`);
   }
 
-  private async resizeRaster(image: RasterImage, resizeSpec: ResizeSpec): Promise<RasterImage> {
+  private resizeRaster(image: RasterImage, resizeSpec: ResizeSpec): RasterImage {
     const target = this.computeTargetSize(image.width, image.height, resizeSpec);
     const isAlreadyRight = target.width === image.width && target.height === image.height;
     if (isAlreadyRight) return image;
 
     this.assertPixelBudget(target.width, target.height);
 
-    const resized = await resizeRgba(
-      {
-        data: new Uint8ClampedArray(image.rgba),
-        width: image.width,
-        height: image.height,
-        colorSpace: "srgb",
-      },
-      {
-        width: target.width,
-        height: target.height,
-      },
-    );
-
     return {
       kind: "raster",
-      width: resized.width,
-      height: resized.height,
-      rgba: new Uint8Array(resized.data.buffer.slice(0)),
+      width: target.width,
+      height: target.height,
+      rgba: this.resizeRgbaBilinear(image.rgba, image.width, image.height, target.width, target.height),
     };
+  }
+
+  private resizeRgbaBilinear(
+    source: Uint8Array,
+    sourceWidth: number,
+    sourceHeight: number,
+    targetWidth: number,
+    targetHeight: number,
+  ): Uint8Array {
+    const target = new Uint8Array(targetWidth * targetHeight * 4);
+
+    const xRatio = targetWidth > 1
+      ? (sourceWidth - 1) / (targetWidth - 1)
+      : 0;
+
+    const yRatio = targetHeight > 1
+      ? (sourceHeight - 1) / (targetHeight - 1)
+      : 0;
+
+    for (let y = 0; y < targetHeight; y++) {
+      const sourceY = y * yRatio;
+      const y0 = Math.floor(sourceY);
+      const y1 = Math.min(y0 + 1, sourceHeight - 1);
+      const yWeight = sourceY - y0;
+
+      for (let x = 0; x < targetWidth; x++) {
+        const sourceX = x * xRatio;
+        const x0 = Math.floor(sourceX);
+        const x1 = Math.min(x0 + 1, sourceWidth - 1);
+        const xWeight = sourceX - x0;
+
+        const targetIndex = (y * targetWidth + x) * 4;
+        const topLeftIndex = (y0 * sourceWidth + x0) * 4;
+        const topRightIndex = (y0 * sourceWidth + x1) * 4;
+        const bottomLeftIndex = (y1 * sourceWidth + x0) * 4;
+        const bottomRightIndex = (y1 * sourceWidth + x1) * 4;
+
+        for (let channel = 0; channel < 4; channel++) {
+          const topLeft = source[topLeftIndex + channel];
+          const topRight = source[topRightIndex + channel];
+          const bottomLeft = source[bottomLeftIndex + channel];
+          const bottomRight = source[bottomRightIndex + channel];
+
+          const top = topLeft + (topRight - topLeft) * xWeight;
+          const bottom = bottomLeft + (bottomRight - bottomLeft) * xWeight;
+          target[targetIndex + channel] = Math.round(top + (bottom - top) * yWeight);
+        }
+      }
+    }
+
+    return target;
   }
 
   private computeTargetSize(srcW: number, srcH: number, spec: ResizeSpec): { width: number; height: number } {
@@ -960,17 +1592,16 @@ export class ImageTransformer {
         case "jpeg": {
           this.assertRaster(image);
           const flattened = this.flattenAlphaOverWhite(image.rgba);
-          const buffer = this.toExactArrayBuffer(flattened);
-          const encoded = await encodeJpeg(
+          const encoded = jpeg.encode(
             {
-              data: new Uint8ClampedArray(buffer),
+              data: Buffer.from(flattened),
               width: image.width,
               height: image.height,
-              colorSpace: "srgb",
             },
-            { quality: this.encodeOptions.jpegQuality },
+            this.encodeOptions.jpegQuality,
           );
-          return { body: new Uint8Array(encoded), contentType: "image/jpeg" };
+
+          return { body: new Uint8Array(encoded.data), contentType: "image/jpeg" };
         }
         case "bmp": {
           this.assertRaster(image);
@@ -985,7 +1616,7 @@ export class ImageTransformer {
         case "tif":
         case "tiff": {
           this.assertRaster(image);
-          const rgba = new Uint8Array(image.rgba.buffer.slice(0));
+          const rgba = this.copyViewToUint8Array(image.rgba);
           const ifd = UTIF.encodeImage(rgba, image.width, image.height);
           const tiff = UTIF.encode([ifd]) as ArrayBuffer;
           return { body: new Uint8Array(tiff), contentType: "image/tiff" };
@@ -998,13 +1629,24 @@ export class ImageTransformer {
         case "webp":
           throw new Error("Internal: webp should be passed through without encoding");
       }
-    } catch (e: unknown) {
-      const message =
-        e instanceof Error
-          ? e.message
-          : `Encode failed (non-Error thrown): ${String(e)}`;
+    } catch (error: unknown) {
+      if (error instanceof ImageTransformError) throw error;
 
-      throw new ImageTransformError("ENCODE_FAILED", 500, message);
+      const message = error instanceof Error ? error.message : `Encode failed with non-Error value: ${String(error)}`;
+
+      throw new ImageTransformError({
+        code: "ENCODE_FAILED",
+        httpStatus: 500,
+        message: `Encode failed while encoding ${format}: ${message}`,
+        stage: "encode",
+        details: {
+          format,
+          sourceKind: image.kind,
+          sourceWidth: image.kind === "raster" ? image.width : 0,
+          sourceHeight: image.kind === "raster" ? image.height : 0,
+        },
+        cause: error,
+      });
     }
   }
 
@@ -1014,7 +1656,7 @@ export class ImageTransformer {
   }
 
   private encodeGifSingleFrame(img: RasterImage): Uint8Array {
-    const rgba = new Uint8Array(img.rgba.buffer.slice(0));
+    const rgba = this.copyViewToUint8Array(img.rgba);
 
     for (let i = 0; i < rgba.length; i += 4) {
       const a = rgba[i + 3];
@@ -1057,15 +1699,18 @@ export class ImageTransformer {
     const h = spec.height ? `${spec.height}` : null;
 
     return svgText.replace(/<svg\b([^>]*)>/i, (full, attrs: string) => {
-      const nextAttrs = this.upsertAttr(this.upsertAttr(attrs, "width", w), "height", h);
-      return `<svg${nextAttrs}>`;
+      const withWidth = this.upsertAttr(attrs, "width", w);
+      const withHeight = this.upsertAttr(withWidth, "height", h);
+      return `<svg${withHeight}>`;
     });
   }
 
   private upsertAttr(attrs: string, name: string, value: string | null): string {
     if (!value) return attrs;
-    const re = new RegExp(`\\s${name}="[^"]*"`, "i");
+
+    const re = new RegExp(`\\s${name}\\s*=\\s*["'][^"']*["']`, "i");
     if (re.test(attrs)) return attrs.replace(re, ` ${name}="${value}"`);
+
     return `${attrs} ${name}="${value}"`;
   }
 
@@ -1147,6 +1792,10 @@ export class ImageTransformer {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   }
 
+  private copyViewToUint8Array(view: ArrayBufferView): Uint8Array {
+    return new Uint8Array(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength));
+  }
+
   private cacheKeyFromRemoteRequest(args: {
     srcUrl: string;
     outputFormat: SupportedFormat;
@@ -1155,16 +1804,26 @@ export class ImageTransformer {
   }): string {
     const w = args.resize.width ?? "";
     const h = args.resize.height ?? "";
-    const raw = `v1|src=${args.srcUrl}|out=${args.outputFormat}|w=${w}|h=${h}|srcfmt=${args.detectedSrcFormatHint}`;
+    const raw = `${IMAGE_CACHE_SCHEMA_VERSION}|src=${args.srcUrl}|out=${args.outputFormat}|w=${w}|h=${h}|srcfmt=${args.detectedSrcFormatHint}`;
     return createHash("sha256").update(raw).digest("hex");
   }
 
   private async ensureCacheDir(): Promise<void> {
     try {
       await fs.promises.mkdir(IMAGE_CACHE_DIR, { recursive: true });
-    } catch (e) {
-      console.error(`Failed to create cache dir ${IMAGE_CACHE_DIR}:`, e);
-      throw new ImageTransformError("INTERNAL", 500, "Internal error");
+    } catch (error) {
+      console.error(`Failed to create cache dir ${IMAGE_CACHE_DIR}:`, error);
+      throw new ImageTransformError({
+        code: "INTERNAL",
+        httpStatus: 500,
+        message: "Failed to create image cache directory",
+        stage: "cache",
+        details: {
+          cacheDir: IMAGE_CACHE_DIR,
+          action: "mkdir",
+        },
+        cause: error,
+      });
     }
   }
 
@@ -1174,10 +1833,10 @@ export class ImageTransformer {
     let raw: string;
     try {
       raw = await fs.promises.readFile(IMAGE_CACHE_INDEX_PATH, "utf-8");
-    } catch (e: unknown) {
-      const code = e instanceof Error ? (e as NodeJS.ErrnoException).code : undefined;
+    } catch (error: unknown) {
+      const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
       if (code === "ENOENT") return {};
-      console.error(`Failed to read cache index ${IMAGE_CACHE_INDEX_PATH}:`, e);
+      console.error(`Failed to read cache index ${IMAGE_CACHE_INDEX_PATH}:`, error);
       return {};
     }
 
@@ -1199,8 +1858,8 @@ export class ImageTransformer {
     try {
       await fs.promises.writeFile(tmpPath, body, "utf-8");
       await fs.promises.rename(tmpPath, IMAGE_CACHE_INDEX_PATH);
-    } catch (e) {
-      console.error(`Failed to write cache index ${IMAGE_CACHE_INDEX_PATH}:`, e);
+    } catch (error) {
+      console.error(`Failed to write cache index ${IMAGE_CACHE_INDEX_PATH}:`, error);
     }
   }
 
@@ -1221,7 +1880,6 @@ export class ImageTransformer {
       try {
         await fs.promises.unlink(filePath);
       } catch {
-        // ignore
       }
     }
 
@@ -1307,8 +1965,8 @@ export class ImageTransformer {
     try {
       await this.ensureCacheDir();
       await fs.promises.writeFile(filePath, Buffer.from(result.body));
-    } catch (e) {
-      console.error(`Failed to write cache file ${filePath}:`, e);
+    } catch (error) {
+      console.error(`Failed to write cache file ${filePath}:`, error);
       return;
     }
 
@@ -1324,10 +1982,32 @@ export class ImageTransformer {
 
     await this.writeCacheIndex(index);
   }
-}
 
-type SvgIntrinsicSize = {
-  width?: number;
-  height?: number;
-  viewBox?: { w: number; h: number };
-};
+  private headersToJsonObject(headers: Headers): ImageTransformErrorDetails {
+    const out: ImageTransformErrorDetails = {};
+    headers.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+
+  private sourceDetails(srcUrl: URL): ImageTransformErrorDetails {
+    return {
+      srcUrl: srcUrl.toString(),
+      protocol: srcUrl.protocol,
+      hostname: srcUrl.hostname,
+      pathname: srcUrl.pathname,
+    };
+  }
+
+  private resizeSpecDetails(spec: ResizeSpec): ImageTransformErrorDetails {
+    return {
+      width: spec.width ?? null,
+      height: spec.height ?? null,
+    };
+  }
+
+  private firstBytesHex(bytes: Uint8Array): string {
+    return Buffer.from(bytes.slice(0, 32)).toString("hex");
+  }
+}
