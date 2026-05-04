@@ -39,6 +39,15 @@ const allowedOrigins = [
     "https://srv.kittycrypto.gg",
     "https://kittycrypto-gg.translate.goog",
     "https://test.kittycrypto.gg",
+
+    "https://kittycrow.dev",
+    "https://nojs.kittycrow.dev",
+    "https://api.kittycrow.dev",
+    "https://app.kittycrow.dev",
+    "https://chat.kittycrow.dev",
+    "https://srv.kittycrow.dev",
+    "https://kittycrow-dev.translate.goog",
+    "https://test.kittycrow.dev"
 ];
 
 const sitesToMap = new Set<string>([
@@ -562,7 +571,7 @@ server.app.get("/render",
                 },
                 {
                     token: RENDER_TOKEN || undefined,
-                    allowedOrigins: ["https://kittycrypto.gg"]
+                    allowedOrigins: ["https://kittycrypto.gg", "https://kittycrow.dev"],
                 }
             );
             //console.log(`Render successful for ${url}, final URL: ${result.finalUrl}`);

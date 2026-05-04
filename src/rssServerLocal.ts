@@ -46,7 +46,11 @@ class RssServerLocal extends RssServer {
             "https://www.kittycrypto.gg",
             "https://test.kittycrypto.gg",
             "https://render.kittycrypto.gg",
-            "http://localhost:8080"
+            
+            "https://kittycrow.dev",
+            "https://www.kittycrow.dev",
+            "https://test.kittycrow.dev",
+            "https://render.kittycrow.dev"
         ];
 
         super(host, port, allowedOrigins);

@@ -18,7 +18,7 @@ type AllowedSourceRule =
         value: string;
     };
 
-const ALLOWLIST_URL = "https://srv.kittycrypto.gg/allowedSources.json";
+const ALLOWLIST_URL = "https://srv.kittycrow.dev/allowedSources.json";
 const ALLOWLIST_TTL_MS = 60_000;
 
 let cachedAllowlist: AllowedSourceRule[] | null = null;
