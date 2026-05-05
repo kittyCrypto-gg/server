@@ -8,7 +8,23 @@ import fs from "fs";
 /* @ts-ignore */
 import "dotenv/config";
 
-type methods = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'OPTIONS';
+type methods = "GET" | "POST" | "PUT" | "DELETE" | "OPTIONS";
+
+type RouteHandler = (
+  req: Request,
+  res: Response
+) => void | Promise<void> | Promise<Response<unknown, Record<string, unknown>> | undefined>;
+
+interface Middleware {
+  route?: {
+    path: string;
+    methods: Record<string, boolean>;
+  };
+  name?: string;
+  handle?: {
+    stack?: Middleware[];
+  };
+}
 
 class Server {
   public app: Express;
@@ -19,30 +35,32 @@ class Server {
   protected certificatePath = process.env.CERT_PATH || undefined;
   protected chainPath = process.env.CHAIN_PATH || undefined;
 
-  private allowedOrigins = new Set<string>([
-    "http://localhost"
-  ]);
-
+  private allowedOrigins = new Set<string>([]);
   private allowedMethods = new Set<methods>(["GET"]);
+  private publicCorsRoutes = new Map<string, Set<methods>>();
 
   public get baseUrl(): string {
     const host = this.host;
     const port = this.port;
+
     return `https://${host}:${port}`;
   }
 
   public addAllowedOrigins(origin: string | string[]): void {
     if (Array.isArray(origin)) {
-      origin.forEach(o => this.allowedOrigins.add(o));
-    } else {
-      this.allowedOrigins.add(origin);
+      origin.forEach((item) => this.allowedOrigins.add(item));
+      return;
     }
+
+    this.allowedOrigins.add(origin);
   }
 
-  constructor(host: string, port?: number, allowedOrigins?: string | string[]) {
+  public constructor(host: string, port?: number, allowedOrigins?: string | string[]) {
     this.host = host;
 
-    allowedOrigins ? this.addAllowedOrigins(allowedOrigins) : null;
+    if (allowedOrigins) {
+      this.addAllowedOrigins(allowedOrigins);
+    }
 
     if (!this.privateKeyPath || !this.certificatePath || !this.chainPath) {
       console.warn("Warning: SSL certificate paths are not fully set in environment variables. Aborting.");
@@ -59,25 +77,33 @@ class Server {
     this.app = express();
     this.app.use(bodyParser.json());
     this.server = https.createServer(sslOptions, this.app);
-
-
-
     this.port = port;
 
-    // single CORS middleware that checks against allowedOrigins/methods
-    this.app.use(cors({
-      origin: (origin, callback) => {
-        if (!origin || this.allowedOrigins.has(origin)) {
-          callback(null, true);
-        } else {
+    this.app.use((req, res, next) => {
+      if (this.isPublicCorsRequest(req)) {
+        cors({
+          origin: "*",
+          methods: this.getPublicCorsMethods(req.path)
+        })(req, res, next);
+
+        return;
+      }
+
+      cors({
+        origin: (origin, callback) => {
+          if (!origin || this.allowedOrigins.has(origin)) {
+            callback(null, true);
+            return;
+          }
+
           callback(new Error("Not allowed by CORS"));
-        }
-      },
-      methods: Array.from(this.allowedMethods),
-    }));
+        },
+        methods: Array.from(this.allowedMethods)
+      })(req, res, next);
+    });
   }
 
-  registerRoute(path: string, method: methods, handler: string | ((req: Request, res: Response) => void | Promise<void> | Promise<Response<any, Record<string, any>> | undefined>)): void {
+  public registerRoute(path: string, method: methods, handler: string | RouteHandler): void {
     if (typeof handler === "string") {
       this.app.use(path, express.static(handler));
       return;
@@ -86,12 +112,23 @@ class Server {
     this.app[method.toLowerCase() as keyof Express](path, handler);
   }
 
-  addCorsOrigin(origin: string, method: methods): void {
+  public addCorsOrigin(origin: string, method: methods): void {
     this.allowedOrigins.add(origin);
     this.allowedMethods.add(method);
   }
 
-  async start(): Promise<void> {
+  public addPubCorsRte(routePath: string, method: methods | methods[]): void {
+    const methodsToAdd = Array.isArray(method) ? method : [method];
+    const existing = this.publicCorsRoutes.get(routePath) ?? new Set<methods>();
+
+    for (const item of methodsToAdd) {
+      existing.add(item);
+    }
+
+    this.publicCorsRoutes.set(routePath, existing);
+  }
+
+  public async start(): Promise<void> {
     this.port = !this.port ? await this.findFreePort() : this.port;
     this.server.listen(this.port);
   }
@@ -100,38 +137,98 @@ class Server {
     for (let port = startPort; port <= endPort; port++) {
       if (await this.isPortFree(port)) return port;
     }
+
     throw new Error("No free ports available");
   }
 
   private isPortFree(port: number): Promise<boolean> {
     return new Promise((resolve) => {
       const server = net.createServer();
+
       server.once("error", () => resolve(false));
       server.once("listening", () => {
         server.close();
         resolve(true);
       });
+
       server.listen(port);
     });
   }
 
-  public logEndpoints() {
-    const router = (this.app as any)._router;
+  private isPublicCorsRequest(req: Request): boolean {
+    const requestedMethod = this.readRequestedCorsMethod(req);
+
+    if (!requestedMethod) {
+      return false;
+    }
+
+    for (const [routePath, routeMethods] of this.publicCorsRoutes) {
+      if (!routeMethods.has(requestedMethod)) {
+        continue;
+      }
+
+      if (this.routeMatches(routePath, req.path)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private getPublicCorsMethods(requestPath: string): methods[] {
+    const methodsForPath = new Set<methods>();
+
+    for (const [routePath, routeMethods] of this.publicCorsRoutes) {
+      if (!this.routeMatches(routePath, requestPath)) {
+        continue;
+      }
+
+      for (const method of routeMethods) {
+        methodsForPath.add(method);
+      }
+    }
+
+    return Array.from(methodsForPath);
+  }
+
+  private readRequestedCorsMethod(req: Request): methods | undefined {
+    const requestMethod = req.method.toUpperCase();
+    const candidate = requestMethod === "OPTIONS"
+      ? req.header("access-control-request-method")?.toUpperCase()
+      : requestMethod;
+
+    return this.isKnownMethod(candidate) ? candidate : undefined;
+  }
+
+  private isKnownMethod(value: string | undefined): value is methods {
+    return value === "GET"
+      || value === "POST"
+      || value === "PUT"
+      || value === "DELETE"
+      || value === "OPTIONS";
+  }
+
+  private routeMatches(routePath: string, requestPath: string): boolean {
+    if (!routePath.endsWith("*")) {
+      return routePath === requestPath;
+    }
+
+    const prefix = routePath.slice(0, -1);
+
+    return requestPath.startsWith(prefix) && requestPath.length > prefix.length;
+  }
+
+  public logEndpoints(): void {
+    const appWithRouter = this.app as Express & {
+      _router?: {
+        stack?: Middleware[];
+      };
+    };
+    const router = appWithRouter._router;
 
     if (!router || !Array.isArray(router.stack)) {
       console.warn("⚠️ Express router not initialised yet");
       return;
-    }
-
-    interface Middleware {
-      route?: {
-        path: string;
-        methods: { [method: string]: boolean };
-      };
-      name?: string;
-      handle?: {
-        stack?: Middleware[];
-      };
     }
 
     router.stack.forEach((middleware: Middleware) => {
@@ -139,15 +236,22 @@ class Server {
         console.log(
           `Endpoint: https://${this.host}:${this.port}${middleware.route.path}, Method: ${Object.keys(middleware.route.methods).join(", ").toUpperCase()}`
         );
-      } else if (middleware.name === "router" && middleware.handle && Array.isArray(middleware.handle.stack)) {
-        middleware.handle.stack.forEach((handler: Middleware) => {
-          if (handler.route) {
-            console.log(
-              `Endpoint: https://${this.host}:${this.port}${handler.route.path}, Method: ${Object.keys(handler.route.methods).join(", ").toUpperCase()}`
-            );
-          }
-        });
+        return;
       }
+
+      if (middleware.name !== "router" || !middleware.handle || !Array.isArray(middleware.handle.stack)) {
+        return;
+      }
+
+      middleware.handle.stack.forEach((handler: Middleware) => {
+        if (!handler.route) {
+          return;
+        }
+
+        console.log(
+          `Endpoint: https://${this.host}:${this.port}${handler.route.path}, Method: ${Object.keys(handler.route.methods).join(", ").toUpperCase()}`
+        );
+      });
     });
   }
 

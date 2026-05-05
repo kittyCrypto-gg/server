@@ -2,8 +2,10 @@ import * as ImageTransformer from "./imageTransformer";
 import Comment, { CommentData } from "./kittyComment";
 import { GithubAutoScheduler } from "./blogScheduler";
 import express, { Request, Response } from "express";
+import { ExtVisitsStore } from "./extVisits";
 import * as helpers from "./serverHelpers";
 import { tokenStore } from "./tokenStore";
+import { TrSites } from "./trustedSites";
 import rateLimiter from "./rateLimiter";
 import RssComment from "./rssComments";
 import { VisitsStore } from "./visits";
@@ -14,6 +16,8 @@ import fetch from "node-fetch";
 import Chat from "./kittyChat";
 import argon2 from "argon2";
 import path from "path";
+
+
 import cors from "cors";
 import fs from "fs";
 /* @ts-ignore */
@@ -29,6 +33,8 @@ const imageTransformer = new ImageTransformer.ImageTransformer();
 const chat_json_path = path.resolve(process.cwd(), "data", "chat.gcm.json");
 const comments_json_path = path.resolve(process.cwd(), "data", "comments.json");
 const rss_comments_json_path = path.resolve(process.cwd(), "data", "rssComments.json");
+
+const BASE_URL = process.env.BASE_URL || "https://srv.kittycrow.dev";
 
 const allowedOrigins = [
     "https://kittycrypto.gg",
@@ -93,6 +99,8 @@ const server = new Server(HOST, PORT, allowedOrigins);
 server.app.use(express.urlencoded({ extended: false }))
 server.app.use(express.json())
 server.app.set("trust proxy", true)
+server.addPubCorsRte("/visits/log/*", "POST")
+server.addPubCorsRte("/visits/stats/*", "GET")
 
 // Session store to track active sessions
 const sessionTokens = new Set<string>();
@@ -115,6 +123,15 @@ const storiesRoot = path.resolve(process.cwd(), "stories");
 
 const visits = new VisitsStore()
 
+const trustedSites = new TrSites({
+    srvBaseUrl: BASE_URL,
+    verificationPath: "/.well-known/kittycrow.key"
+});
+
+const externalVisits = new ExtVisitsStore({
+    rootDirPath: path.resolve(process.cwd(), "data", "visits")
+});
+
 server.app.get("/session-token",
     async (req: Request, res: Response) => {
 
@@ -128,7 +145,8 @@ server.app.get("/session-token",
         const sessionToken = helpers.generateSessionToken();
         TokenStore.touchToken(sessionToken);
         res.json({ sessionToken });
-    });
+    }
+);
 
 server.app.post("/session-token/reregister",
     async (req: Request, res: Response) => {
@@ -158,12 +176,14 @@ server.app.post("/session-token/reregister",
             sessionToken,
             expiresAtMs: TokenStore.getExpiryMs(sessionToken),
         });
-    });
+    }
+);
 
 server.app.get("/get-ip", cors({ origin: "*" }),
     (req: Request, res: Response) => {
         res.json({ ip: helpers.getClientIp(req) });
-    });
+    }
+);
 
 server.app.get("/get-ip/sha256", cors({ origin: "*" }),
     (req: Request, res: Response) => {
@@ -174,7 +194,8 @@ server.app.get("/get-ip/sha256", cors({ origin: "*" }),
             console.error("❌ Error hashing IP:", error);
             res.status(500).json({ error: "Failed to hash IP address." });
         }
-    });
+    }
+);
 
 server.app.get("/chat/stream",
     async (req: Request, res: Response) => {
@@ -257,7 +278,8 @@ server.app.get("/comments/load",
             console.error("❌ Error retrieving comments:", error);
             res.status(500).json({ error: "Failed to load comments." });
         }
-    });
+    }
+);
 
 chat.onNewMessage = async () => {
     await helpers.notifyClients(chat, clients);
@@ -272,7 +294,8 @@ server.app.get('/robots.txt',
             Sitemap: https://srv.kittycrypto.gg/sitemap.xml
             Host: nojs.kittycrypto.gg`
         );
-    });
+    }
+);
 
 server.app.get("/stories.json",
     async (_req: Request, res: Response) => {
@@ -282,7 +305,8 @@ server.app.get("/stories.json",
         } catch {
             res.status(500).json({ error: "Failed to generate stories index." });
         }
-    });
+    }
+);
 
 server.app.get(/^\/stories\/(.+)$/,
     async (req: Request, res: Response) => {
@@ -301,12 +325,14 @@ server.app.get(/^\/stories\/(.+)$/,
         }
 
         res.sendFile(filePath);
-    });
+    }
+);
 
 server.app.get(["/sitemap.xml", "/website/sitemap.xml"],
     async (req, res) => {
         return helpers.genSiteMap(sitesToMap, res);
-    });
+    }
+);
 
 server.app.get("/allowedSources.json",
     async (_req: Request, res: Response) => {
@@ -348,7 +374,8 @@ server.app.get("/allowedSources.json",
                 sources: []
             });
         }
-    });
+    }
+);
 
 server.app.all("/chatbot/register",
     async (req: Request, res: Response) => {
@@ -457,7 +484,8 @@ server.app.all("/chatbot/register",
         } finally {
             //console.log("=== /chatbot/register END ===");
         }
-    });
+    }
+);
 
 server.app.post("/chatbot/authenticate",
     async (req: Request, res: Response) => {
@@ -503,7 +531,8 @@ server.app.post("/chatbot/authenticate",
             console.error("❌ /chatbot/authenticate failed:", err)
             res.status(500).json({ ok: false })
         }
-    })
+    }
+);
 
 server.app.get("/img",
     async (req: Request, res: Response) => {
@@ -529,7 +558,8 @@ server.app.get("/img",
         } catch (err) {
             helpers.sendImgError(res, err);
         }
-    });
+    }
+);
 
 server.app.get("/render",
     async (req: Request, res: Response) => {
@@ -586,7 +616,123 @@ server.app.get("/render",
             res.status(500).send(`Render failed: ${message}`);
             console.warn(`Render failed for ${url}. Received token: ${token}. Error: ${message}`);
         }
-    });
+    }
+);
+
+server.app.post("/verify/register/:site",
+    RateLimiter.wrap(
+        {
+            scope: "trusted-sites-register",
+            windowMs: 60_000,
+            maxAttempts: 10,
+            resolveBucketKey: (req: Request): string => {
+                return helpers.getClientIp(req);
+            },
+            onRejected: (_req, res, decision) => {
+                res.status(429).json({
+                    ok: false,
+                    error: `Too many verification registration requests. Retry in ${String(decision.retryAfterSeconds)} seconds.`
+                });
+            }
+        },
+        async (req: Request, res: Response) => {
+            try {
+                const site = trustedSites.readSiteParam(req.params.site);
+
+                const result = await trustedSites.reg({
+                    site,
+                    srvBaseUrl: BASE_URL
+                });
+
+                res.setHeader("Cache-Control", "no-store");
+                res.status(200).json({
+                    ok: true,
+                    ...result
+                });
+            } catch (error) {
+                const message = error instanceof Error ? error.message : "Failed to register verification challenge.";
+
+                console.error("❌ Error registering trusted site challenge:", error);
+                res.status(400).json({
+                    ok: false,
+                    error: message
+                });
+            }
+        }
+    )
+);
+
+server.app.get("/verify/:site/kittycrow.key",
+    async (req: Request, res: Response) => {
+        try {
+            const site = trustedSites.readSiteParam(req.params.site);
+            const keyFile = trustedSites.key({ site });
+
+            res.setHeader("Cache-Control", "no-store");
+            res.setHeader("Content-Type", keyFile.contentType);
+            res.setHeader("Content-Disposition", `attachment; filename="${keyFile.fileName}"`);
+            res.setHeader("X-Kittycrow-Key-Sha256", keyFile.keyFileSha256);
+            res.status(200).send(keyFile.body);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to generate verification key file.";
+
+            console.error("❌ Error generating trusted site key file:", error);
+            res.status(404).json({
+                ok: false,
+                error: message
+            });
+        }
+    }
+);
+
+server.app.post("/verify/:site",
+    RateLimiter.wrap(
+        {
+            scope: "trusted-sites-check",
+            windowMs: 60_000,
+            maxAttempts: 10,
+            resolveBucketKey: (req: Request): string => {
+                return helpers.getClientIp(req);
+            },
+            onRejected: (_req, res, decision) => {
+                res.status(429).json({
+                    ok: false,
+                    error: `Too many verification check requests. Retry in ${String(decision.retryAfterSeconds)} seconds.`
+                });
+            }
+        },
+        async (req: Request, res: Response) => {
+            try {
+                const site = trustedSites.readSiteParam(req.params.site);
+
+                const result = await trustedSites.chk({ site });
+
+                res.setHeader("Cache-Control", "no-store");
+
+                if (!result.verified) {
+                    res.status(422).json({
+                        ok: false,
+                        ...result
+                    });
+                    return;
+                }
+
+                res.status(200).json({
+                    ok: true,
+                    ...result
+                });
+            } catch (error) {
+                const message = error instanceof Error ? error.message : "Failed to verify trusted site.";
+
+                console.error("❌ Error checking trusted site verification:", error);
+                res.status(400).json({
+                    ok: false,
+                    error: message
+                });
+            }
+        }
+    )
+);
 
 server.app.post("/visits/log",
     async (req: Request, res: Response) => {
@@ -607,7 +753,8 @@ server.app.post("/visits/log",
             console.error("❌ Error logging visit:", error)
             res.status(500).json({ error: "Failed to log visit." })
         }
-    })
+    }
+);
 
 server.app.get("/visits/stats",
     async (req: Request, res: Response) => {
@@ -626,7 +773,114 @@ server.app.get("/visits/stats",
             console.error("❌ Error loading visit stats:", error)
             res.status(500).json({ error: "Failed to load visit stats." })
         }
-    })
+    }
+);
+
+server.app.post("/visits/log/:site",
+    helpers.matchOrig,
+    RateLimiter.wrap(
+        {
+            scope: "external-visits-log",
+            windowMs: 60_000,
+            maxAttempts: 60,
+            resolveOriginKey: (req: Request): string => {
+                return typeof req.params.site === "string" ? req.params.site.trim() : "";
+            },
+            resolveBucketKey: (req: Request): string => {
+                return helpers.getClientIp(req);
+            },
+            onRejected: (_req, res, decision) => {
+                res.status(429).json({
+                    ok: false,
+                    error: `Too many visit log requests. Retry in ${String(decision.retryAfterSeconds)} seconds.`
+                });
+            }
+        },
+        async (req: Request, res: Response) => {
+            try {
+                const site = typeof req.params.site === "string" ? req.params.site : "";
+                const encodedSite = encodeURIComponent(site);
+                const ip = helpers.getClientIp(req);
+                const bodyPage = typeof req.body?.page === "string" ? req.body.page : "";
+                const fallbackPage = helpers.readVisitSource(req);
+                const page = bodyPage.trim() || fallbackPage.trim();
+
+                if (!site.trim()) {
+                    res.status(400).json({ error: "A site is required to log a visit." });
+                    return;
+                }
+
+                if (!page) {
+                    res.status(400).json({ error: "A page path is required to log a visit." });
+                    return;
+                }
+
+                const trusted = await trustedSites.isTrst(site);
+
+                if (!trusted) {
+                    res.status(403).json({
+                        ok: false,
+                        error: `This site is not registered for public visit tracking. Register it first using \
+                        ${BASE_URL}/verify/register/${encodedSite}, upload the generated kittycrow.key file to \
+                        ${site}/.well-known/kittycrow.key, then verify it with ${BASE_URL}/verify/${encodedSite}.`
+                        .replace(/\s+/g, " ").trim()
+                    });
+                    return;
+                }
+
+                const result = await externalVisits.logVisit(site, ip, page);
+
+                res.status(200).json(result);
+            } catch (error) {
+                console.error("❌ Error logging external visit:", error);
+                res.status(500).json({ error: "Failed to log visit." });
+            }
+        }
+    )
+);
+
+server.app.get("/visits/stats/:site",
+    helpers.matchOrig,
+    async (req: Request, res: Response) => {
+        try {
+            const site = typeof req.params.site === "string" ? req.params.site : "";
+            const encodedSite = encodeURIComponent(site);
+            const page = typeof req.query.page === "string" ? req.query.page : "";
+
+            if (!site.trim()) {
+                res.status(400).json({ error: "A site is required to load visit stats." });
+                return;
+            }
+
+            const trusted = await trustedSites.isTrst(site);
+
+            if (!trusted) {
+                res.status(403).json({
+                    ok: false,
+                    error: `This site is not registered for public visit tracking. Register it first using \
+                    ${BASE_URL}/verify/register/${encodedSite}, upload the generated kittycrow.key file to \
+                    ${site}/.well-known/kittycrow.key, then verify it with ${BASE_URL}/verify/${encodedSite}.`
+                    .replace(/\s+/g, " ").trim()
+                });
+                return;
+            }
+
+            if (page.trim()) {
+                const stats = await externalVisits.getPageStats(site, page);
+
+                res.status(200).json(stats);
+                return;
+            }
+
+            const stats = await externalVisits.getStats(site);
+
+            res.status(200).json(stats);
+        } catch (error) {
+            console.error("❌ Error loading external visit stats:", error);
+            res.status(500).json({ error: "Failed to load visit stats." });
+        }
+    }
+);
 
 server.app.get("/presence",
     async (_req: Request, res: Response) => {
@@ -638,7 +892,8 @@ server.app.get("/presence",
             console.error("❌ Error loading presence:", error);
             res.status(502).json({ error: "Failed to load presence." });
         }
-    });
+    }
+);
 
 server.app.get("/website/manifest",
     async (_req: Request, res: Response) => {
@@ -663,7 +918,8 @@ server.app.get("/website/manifest",
                 error: "Failed to read build manifest."
             });
         }
-    });
+    }
+);
 
 server.app.post("/website/manifest/update",
     RateLimiter.wrap(
@@ -736,7 +992,8 @@ server.app.get("/notices",
             console.error("❌ /notices failed:", error);
             res.status(500).json([]);
         }
-    });
+    }
+);
 
 server.app.get("/status",
     (_req: Request, res: Response) => {
@@ -745,7 +1002,8 @@ server.app.get("/status",
             online: true,
             now: new Date().toISOString()
         });
-    });
+    }
+);
 
 server.start();
 void helpers.trackChatChanges(chat_json_path, chat, clients).catch((error: unknown) => {

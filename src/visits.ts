@@ -1,39 +1,47 @@
-import { MutexJsonStore } from "./mutexJsonStore"
+import { promises as fs } from "fs"
 import * as path from "path"
+import * as protobuf from "protobufjs"
+import type { IConversionOptions } from "protobufjs"
+import { MutexJsonStore } from "./mutexStore"
+import { MutexProtoBuffStore, ProtoBuffCodec } from "./mutexPBstore"
 
-type UnixTimestampMs = number
+type NodeErrorWithCode = Error & { code?: string }
 
-type VisitEntry = {
+export type UnixTimestampMs = number
+
+export type VisitEntry = {
     count: number
     timestamps: UnixTimestampMs[]
 }
 
-type VisitBucket = {
+export type VisitBucket = {
     visits: number
     ips: Record<string, VisitEntry>
 }
 
-type VisitsModel = {
+export type VisitsModel = {
     pages: Record<string, VisitBucket>
     updatedAt: UnixTimestampMs
 }
 
-type LegacyIsoTimestamp = string
+export type LegacyIsoTimestamp = string
 
-type LegacyVisitEntry = {
+export type LegacyVisitEntry = {
     count: number
     timestamps: LegacyIsoTimestamp[]
 }
 
-type LegacyVisitBucket = {
+export type LegacyVisitBucket = {
     visits: number
     ips: Record<string, LegacyVisitEntry>
 }
 
-type LegacyVisitsModel = LegacyVisitBucket & {
+export type LegacyVisitsModel = LegacyVisitBucket & {
     pages: Record<string, LegacyVisitBucket>
     updatedAt: LegacyIsoTimestamp | UnixTimestampMs
 }
+
+export type VisitsModelInput = VisitsModel | LegacyVisitsModel
 
 export type VisitsStats = {
     visits: number
@@ -57,45 +65,113 @@ export type VisitsLogResult = VisitsStats & {
     page: PageVisitsLogResult
 }
 
-type VisitsStoreOptions = {
+export type VisitsStoreOptions = {
     filePath?: string
     maxTimestampsPerIp?: number
     lockTimeoutMs?: number
     lockRetryDelayMs?: number
 }
 
+export type VisitsStorePaths = {
+    protoBuffFilePath: string
+    legacyJsonFilePath: string
+}
+
+export type VisitsBackingStore<TModel> = {
+    read: () => Promise<TModel>
+    update: (update: (current: TModel) => TModel | Promise<TModel>) => Promise<TModel>
+}
+
+export const visitsProtoSchema = `
+syntax = "proto3";
+
+message VisitEntry {
+    uint64 count = 1;
+    repeated int64 timestamps = 2;
+}
+
+message VisitBucket {
+    uint64 visits = 1;
+    map<string, VisitEntry> ips = 2;
+}
+
+message VisitsModel {
+    map<string, VisitBucket> pages = 1;
+    int64 updatedAt = 2;
+}
+`
+
+const visitsProtoRoot = protobuf.parse(visitsProtoSchema).root
+const visitsMessageType = visitsProtoRoot.lookupType("VisitsModel")
+
+export const visitsProtoConversionOptions: IConversionOptions = {
+    longs: Number,
+    enums: String,
+    defaults: true,
+    arrays: true,
+    objects: true
+}
+
+export const visitsProtoCodec: ProtoBuffCodec<VisitsModel> = {
+    encode: (value: VisitsModel): Buffer => {
+        const validationError = visitsMessageType.verify(value)
+
+        if (validationError !== null) {
+            throw new Error(`VisitsStore cannot encode invalid protobuf payload: ${validationError}`)
+        }
+
+        const message = visitsMessageType.fromObject(value)
+        const encoded = visitsMessageType.encode(message).finish()
+
+        return Buffer.from(encoded)
+    },
+
+    decode: (raw: Buffer): VisitsModel => {
+        const message = visitsMessageType.decode(raw)
+        const plainObject = visitsMessageType.toObject(message, visitsProtoConversionOptions)
+
+        return plainObject as VisitsModel
+    }
+}
+
 export class VisitsStore {
-    private readonly maxTimestampsPerIp: number
-    private readonly store: MutexJsonStore<VisitsModel | LegacyVisitsModel>
+    protected readonly maxTimestampsPerIp: number
+    protected readonly protoBuffFilePath: string
+    protected readonly legacyJsonFilePath: string
+    protected readonly lockTimeoutMs?: number
+    protected readonly lockRetryDelayMs?: number
+    protected readonly store: VisitsBackingStore<VisitsModel>
+    protected migrationPromise?: Promise<void>
 
     public constructor(options: VisitsStoreOptions = {}) {
-        const filePath = options.filePath ?? path.resolve(process.cwd(), "data", "visits.json")
-        this.maxTimestampsPerIp = options.maxTimestampsPerIp ?? 50
+        const storePaths = this.resolveStorePaths(options.filePath)
 
-        this.store = new MutexJsonStore<VisitsModel | LegacyVisitsModel>({
-            filePath,
-            lockTimeoutMs: options.lockTimeoutMs,
-            lockRetryDelayMs: options.lockRetryDelayMs,
-            initialValue: () => ({
-                pages: {},
-                updatedAt: Date.now()
-            })
-        })
+        this.maxTimestampsPerIp = options.maxTimestampsPerIp ?? 50
+        this.protoBuffFilePath = storePaths.protoBuffFilePath
+        this.legacyJsonFilePath = storePaths.legacyJsonFilePath
+        this.lockTimeoutMs = options.lockTimeoutMs
+        this.lockRetryDelayMs = options.lockRetryDelayMs
+        this.store = this.createStore(this.protoBuffFilePath)
     }
 
     public async getStats(): Promise<VisitsStats> {
-        const model = this.normaliseModel(await this.store.read())
+        await this.ensureMigrated()
+
+        const model = await this.readNormalisedModel()
+
         return this.toStats(model)
     }
 
     public async getPageStats(page: string): Promise<PageVisitsStats> {
+        await this.ensureMigrated()
+
         const normalisedPage = this.normalisePage(page)
 
         if (!normalisedPage) {
             throw new Error("VisitsStore.getPageStats requires a non-empty page string")
         }
 
-        const model = this.normaliseModel(await this.store.read())
+        const model = await this.readNormalisedModel()
         const pageBucket = model.pages[normalisedPage] ?? this.createEmptyBucket()
 
         return {
@@ -107,6 +183,8 @@ export class VisitsStore {
     }
 
     public async logVisit(ip: string, page: string, at: Date = new Date()): Promise<VisitsLogResult> {
+        await this.ensureMigrated()
+
         const normalisedIp = this.normaliseIp(ip)
         const normalisedPage = this.normalisePage(page)
 
@@ -120,10 +198,8 @@ export class VisitsStore {
 
         const timestamp = at.getTime()
 
-        const next = this.normaliseModel(
-            await this.store.update((current) =>
-                this.applyVisit(this.normaliseModel(current), normalisedIp, normalisedPage, timestamp)
-            )
+        const next = await this.updateNormalisedModel((current) =>
+            this.applyVisit(current, normalisedIp, normalisedPage, timestamp)
         )
 
         const pageBucket = next.pages[normalisedPage]
@@ -148,7 +224,92 @@ export class VisitsStore {
         }
     }
 
-    private toStats(model: VisitsModel): VisitsStats {
+    protected async ensureMigrated(): Promise<void> {
+        this.migrationPromise ??= this.migrateLegacyJsonIfNeeded()
+
+        await this.migrationPromise
+    }
+
+    protected async migrateLegacyJsonIfNeeded(): Promise<void> {
+        const protoBuffExists = await this.fileExists(this.protoBuffFilePath)
+
+        if (protoBuffExists) {
+            return
+        }
+
+        const legacyJsonExists = await this.fileExists(this.legacyJsonFilePath)
+
+        if (!legacyJsonExists) {
+            return
+        }
+
+        const legacyStore = this.createLegacyStore(this.legacyJsonFilePath)
+        const legacyModel = this.normaliseModel(await legacyStore.read())
+
+        await this.writeMigratedModel(legacyModel)
+    }
+
+    protected async writeMigratedModel(legacyModel: VisitsModel): Promise<void> {
+        await this.updateModel((current) => {
+            const currentModel = this.normaliseModel(current)
+
+            return this.hasStoredVisits(currentModel) ? currentModel : legacyModel
+        })
+    }
+
+    protected async readNormalisedModel(): Promise<VisitsModel> {
+        return this.normaliseModel(await this.readModel())
+    }
+
+    protected async updateNormalisedModel(
+        update: (current: VisitsModel) => VisitsModel | Promise<VisitsModel>
+    ): Promise<VisitsModel> {
+        const next = await this.updateModel(async (current) => {
+            const normalisedCurrent = this.normaliseModel(current)
+
+            return await update(normalisedCurrent)
+        })
+
+        return this.normaliseModel(next)
+    }
+
+    protected async readModel(): Promise<VisitsModelInput> {
+        return await this.store.read()
+    }
+
+    protected async updateModel(
+        update: (current: VisitsModelInput) => VisitsModel | Promise<VisitsModel>
+    ): Promise<VisitsModel> {
+        return await this.store.update(async (current) => await update(current))
+    }
+
+    protected createStore(filePath: string): VisitsBackingStore<VisitsModel> {
+        return new MutexProtoBuffStore<VisitsModel>({
+            filePath,
+            lockTimeoutMs: this.lockTimeoutMs,
+            lockRetryDelayMs: this.lockRetryDelayMs,
+            initialValue: () => this.createInitialModel(),
+            codec: visitsProtoCodec
+        })
+    }
+
+    protected createLegacyStore(filePath: string): VisitsBackingStore<VisitsModelInput> {
+        return new MutexJsonStore<VisitsModelInput>({
+            filePath,
+            lockTimeoutMs: this.lockTimeoutMs,
+            lockRetryDelayMs: this.lockRetryDelayMs,
+            initialValue: () => this.createInitialModel()
+        })
+    }
+
+    protected createInitialModel(): VisitsModel {
+        return {
+            pages: {},
+            updatedAt: Date.now()
+        }
+    }
+
+    protected toStats(model: VisitsModel): VisitsStats {
         return {
             visits: this.getOverallVisits(model),
             uniqueVisitors: this.getOverallUniqueVisitors(model),
@@ -156,7 +317,7 @@ export class VisitsStore {
         }
     }
 
-    private applyVisit(
+    protected applyVisit(
         model: VisitsModel,
         ip: string,
         page: string,
@@ -174,7 +335,7 @@ export class VisitsStore {
         }
     }
 
-    private applyVisitToBucket(
+    protected applyVisitToBucket(
         bucket: VisitBucket,
         ip: string,
         timestamp: UnixTimestampMs
@@ -200,7 +361,7 @@ export class VisitsStore {
         }
     }
 
-    private normaliseModel(model: VisitsModel | LegacyVisitsModel): VisitsModel {
+    protected normaliseModel(model: VisitsModelInput): VisitsModel {
         const rawPages = this.readPages(model)
         const pages: Record<string, VisitBucket> = {}
 
@@ -226,7 +387,7 @@ export class VisitsStore {
         }
     }
 
-    private normaliseBucket(value: unknown): VisitBucket {
+    protected normaliseBucket(value: unknown): VisitBucket {
         if (!this.isRecord(value)) {
             return this.createEmptyBucket()
         }
@@ -258,7 +419,7 @@ export class VisitsStore {
         }
     }
 
-    private normaliseEntry(value: unknown): VisitEntry | undefined {
+    protected normaliseEntry(value: unknown): VisitEntry | undefined {
         if (!this.isRecord(value)) {
             return undefined
         }
@@ -285,7 +446,7 @@ export class VisitsStore {
         }
     }
 
-    private getOverallVisits(model: VisitsModel): number {
+    protected getOverallVisits(model: VisitsModel): number {
         let visits = 0
 
         for (const bucket of Object.values(model.pages)) {
@@ -295,7 +456,7 @@ export class VisitsStore {
         return visits
     }
 
-    private getOverallUniqueVisitors(model: VisitsModel): number {
+    protected getOverallUniqueVisitors(model: VisitsModel): number {
         const uniqueIps = new Set<string>()
 
         for (const bucket of Object.values(model.pages)) {
@@ -307,7 +468,7 @@ export class VisitsStore {
         return uniqueIps.size
     }
 
-    private getOverallIpVisitCount(model: VisitsModel, ip: string): number {
+    protected getOverallIpVisitCount(model: VisitsModel, ip: string): number {
         let count = 0
 
         for (const bucket of Object.values(model.pages)) {
@@ -317,7 +478,7 @@ export class VisitsStore {
         return count
     }
 
-    private getOverallLastVisitAt(model: VisitsModel, ip: string): UnixTimestampMs | undefined {
+    protected getOverallLastVisitAt(model: VisitsModel, ip: string): UnixTimestampMs | undefined {
         let lastVisitAt: UnixTimestampMs | undefined
 
         for (const bucket of Object.values(model.pages)) {
@@ -336,19 +497,20 @@ export class VisitsStore {
         return lastVisitAt
     }
 
-    private createEmptyBucket(): VisitBucket {
+    protected createEmptyBucket(): VisitBucket {
         return {
             visits: 0,
             ips: {}
         }
     }
 
-    private readPages(model: VisitsModel | LegacyVisitsModel): Record<string, unknown> {
+    protected readPages(model: VisitsModelInput): Record<string, unknown> {
         const candidate = (model as { pages?: unknown }).pages
+
         return this.isRecord(candidate) ? candidate : {}
     }
 
-    private appendCapped(list: number[], value: number, max: number): number[] {
+    protected appendCapped(list: number[], value: number, max: number): number[] {
         const next = [...list, value]
         const overflow = next.length - max
 
@@ -359,7 +521,7 @@ export class VisitsStore {
         return next.slice(overflow)
     }
 
-    private normaliseTimestamp(value: unknown): UnixTimestampMs | undefined {
+    protected normaliseTimestamp(value: unknown): UnixTimestampMs | undefined {
         if (typeof value === "number" && Number.isFinite(value) && value > 0) {
             return Math.floor(value)
         }
@@ -377,7 +539,7 @@ export class VisitsStore {
         return parsed
     }
 
-    private normaliseIp(ip: string): string {
+    protected normaliseIp(ip: string): string {
         const trimmed = ip.trim()
 
         if (!trimmed) {
@@ -391,7 +553,7 @@ export class VisitsStore {
         return trimmed
     }
 
-    private normalisePage(page: string): string {
+    protected normalisePage(page: string): string {
         const trimmed = page.trim()
 
         if (!trimmed) {
@@ -413,7 +575,63 @@ export class VisitsStore {
         }
     }
 
-    private isRecord(value: unknown): value is Record<string, unknown> {
+    protected hasStoredVisits(model: VisitsModel): boolean {
+        for (const bucket of Object.values(model.pages)) {
+            if (bucket.visits > 0 || Object.keys(bucket.ips).length > 0) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    protected resolveStorePaths(filePath: string | undefined): VisitsStorePaths {
+        const resolvedFilePath = filePath ?? path.resolve(process.cwd(), "data", "visits.pb")
+        const extension = path.extname(resolvedFilePath).toLowerCase()
+
+        if (extension === ".json") {
+            return {
+                protoBuffFilePath: this.replaceExtension(resolvedFilePath, ".pb"),
+                legacyJsonFilePath: resolvedFilePath
+            }
+        }
+
+        if (extension === ".pb") {
+            return {
+                protoBuffFilePath: resolvedFilePath,
+                legacyJsonFilePath: this.replaceExtension(resolvedFilePath, ".json")
+            }
+        }
+
+        return {
+            protoBuffFilePath: `${resolvedFilePath}.pb`,
+            legacyJsonFilePath: `${resolvedFilePath}.json`
+        }
+    }
+
+    protected replaceExtension(filePath: string, extension: string): string {
+        const parsed = path.parse(filePath)
+
+        return path.join(parsed.dir, `${parsed.name}${extension}`)
+    }
+
+    protected async fileExists(filePath: string): Promise<boolean> {
+        try {
+            await fs.access(filePath)
+
+            return true
+        } catch (err: unknown) {
+            const code = (err as NodeErrorWithCode).code
+
+            if (code === "ENOENT") {
+                return false
+            }
+
+            throw err
+        }
+    }
+
+    protected isRecord(value: unknown): value is Record<string, unknown> {
         return typeof value === "object" && value !== null && !Array.isArray(value)
     }
 }

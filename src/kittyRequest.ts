@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import Server from "./baseServer";
 import { tokenStore } from "./tokenStore";
-import { MutexJsonStore } from "./mutexJsonStore";
+import { MutexJsonStore } from "./mutexStore";
 
 type TokenLocator = (req: Request) => string | null;
 

@@ -36,6 +36,7 @@
     "node-fetch": "^3.3.2",
     "omggif": "^1.0.10",
     "openai": "^6.15.0",
+    "protobufjs": "^8.0.3",
     "puppeteer": "^24.37.1",
     "puppeteer-core": "^24.38.0",
     "rss-parser": "^3.13.0",

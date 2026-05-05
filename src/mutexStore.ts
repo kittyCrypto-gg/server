@@ -1,8 +1,25 @@
 import { promises as fs } from 'fs'
+import { FileHandle } from 'fs/promises'
 import * as crypto from 'crypto'
 import * as path from 'path'
 
 type NodeErrorWithCode = Error & { code?: string }
+
+type StoreFileContent = string | Buffer
+
+type CorruptStoreArgs<TFileContent extends StoreFileContent> = {
+    filePath: string
+    raw: TFileContent
+    backupPath: string
+}
+
+type MutexFileStoreOptions<T, TFileContent extends StoreFileContent> = {
+    filePath: string
+    initialValue: () => T
+    lockTimeoutMs?: number
+    lockRetryDelayMs?: number
+    onCorrupt?: (args: CorruptStoreArgs<TFileContent>) => void
+}
 
 class AsyncMutex {
     private chain: Promise<void> = Promise.resolve()
@@ -16,6 +33,7 @@ class AsyncMutex {
         })
 
         await previous
+
         try {
             return await fn()
         } finally {
@@ -40,6 +58,7 @@ class Lockfile {
 
         while (true) {
             const acquired = await this.tryCreate()
+
             if (acquired) {
                 return async () => {
                     await this.safeUnlink(this.lockPath)
@@ -47,8 +66,9 @@ class Lockfile {
             }
 
             const elapsed = Date.now() - startedAt
+
             if (elapsed >= this.timeoutMs) {
-                throw new Error(`MutexJsonStore lock timeout after ${elapsed}ms (lock: ${this.lockPath})`)
+                throw new Error(`MutexFileStore lock timeout after ${elapsed}ms (lock: ${this.lockPath})`)
             }
 
             await this.sleep(this.retryDelayMs)
@@ -58,16 +78,20 @@ class Lockfile {
     private async tryCreate(): Promise<boolean> {
         try {
             const handle = await fs.open(this.lockPath, 'wx')
+
             try {
                 await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`, { encoding: 'utf8' })
                 await handle.sync()
             } finally {
                 await handle.close()
             }
+
             return true
         } catch (err: unknown) {
             const code = (err as NodeErrorWithCode).code
+
             if (code === 'EEXIST') return false
+
             throw err
         }
     }
@@ -77,7 +101,9 @@ class Lockfile {
             await fs.unlink(filePath)
         } catch (err: unknown) {
             const code = (err as NodeErrorWithCode).code
+
             if (code === 'ENOENT') return
+
             throw err
         }
     }
@@ -87,25 +113,15 @@ class Lockfile {
     }
 }
 
-type MutexJsonStoreOptions<T> = {
-    filePath: string
-    initialValue: () => T
-    lockTimeoutMs?: number
-    lockRetryDelayMs?: number
-    jsonIndent?: number
-    onCorrupt?: (args: { filePath: string; raw: string; backupPath: string }) => void
-}
+export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
+    protected readonly filePath: string
+    protected readonly dirPath: string
+    protected readonly initialValue: () => T
+    protected readonly mutex: AsyncMutex
+    protected readonly lockfile: Lockfile
+    protected readonly onCorrupt?: (args: CorruptStoreArgs<TFileContent>) => void
 
-export class MutexJsonStore<T> {
-    private readonly filePath: string
-    private readonly dirPath: string
-    private readonly initialValue: () => T
-    private readonly mutex: AsyncMutex
-    private readonly lockfile: Lockfile
-    private readonly jsonIndent: number
-    private readonly onCorrupt?: (args: { filePath: string; raw: string; backupPath: string }) => void
-
-    public constructor(options: MutexJsonStoreOptions<T>) {
+    public constructor(options: MutexFileStoreOptions<T, TFileContent>) {
         this.filePath = options.filePath
         this.dirPath = path.dirname(options.filePath)
         this.initialValue = options.initialValue
@@ -113,30 +129,36 @@ export class MutexJsonStore<T> {
 
         const lockTimeoutMs = options.lockTimeoutMs ?? 5_000
         const lockRetryDelayMs = options.lockRetryDelayMs ?? 25
-        this.lockfile = new Lockfile(this.filePath, lockTimeoutMs, lockRetryDelayMs)
 
-        this.jsonIndent = options.jsonIndent ?? 2
+        this.lockfile = new Lockfile(this.filePath, lockTimeoutMs, lockRetryDelayMs)
         this.onCorrupt = options.onCorrupt
     }
 
     public async read(): Promise<T> {
-        await fs.mkdir(this.dirPath, { recursive: true })
+        await this.ensureDirectory()
 
         const raw = await this.readFileOrNull(this.filePath)
+
         if (raw === null) {
             const initial = this.initialValue()
+
             await this.atomicWrite(initial)
+
             return initial
         }
 
-        const parsed = this.safeParse(raw)
+        const parsed = this.deserialize(raw)
+
         if (parsed === null) {
-            const backupPath = `${this.filePath}.corrupt.${Date.now()}.bak`
-            await fs.writeFile(backupPath, raw, { encoding: 'utf8' })
+            const backupPath = this.createCorruptBackupPath()
+
+            await this.writeRawFile(backupPath, raw)
             this.onCorrupt?.({ filePath: this.filePath, raw, backupPath })
 
             const initial = this.initialValue()
+
             await this.atomicWrite(initial)
+
             return initial
         }
 
@@ -144,29 +166,38 @@ export class MutexJsonStore<T> {
     }
 
     public async update(update: (current: T) => T | Promise<T>): Promise<T> {
+        return await this.withStoreLock(async () => {
+            const current = await this.read()
+            const next = await update(current)
+
+            await this.atomicWrite(next)
+
+            return next
+        })
+    }
+
+    protected async withStoreLock<TValue>(operation: () => Promise<TValue>): Promise<TValue> {
         return await this.mutex.runExclusive(async () => {
-            await fs.mkdir(this.dirPath, { recursive: true })
+            await this.ensureDirectory()
 
             const release = await this.lockfile.acquire()
+
             try {
-                const current = await this.read()
-                const next = await update(current)
-                await this.atomicWrite(next)
-                return next
+                return await operation()
             } finally {
                 await release()
             }
         })
     }
 
-    private async atomicWrite(value: T): Promise<void> {
-        const json = `${JSON.stringify(value, null, this.jsonIndent)}\n`
-        const tmpName = `.tmp.${Date.now()}.${crypto.randomBytes(6).toString('hex')}.json`
-        const tmpPath = path.join(this.dirPath, tmpName)
+    protected async atomicWrite(value: T): Promise<void> {
+        const fileContent = this.serialize(value)
+        const tmpPath = path.join(this.dirPath, this.createTempFileName())
 
         const handle = await fs.open(tmpPath, 'w')
+
         try {
-            await handle.writeFile(json, { encoding: 'utf8' })
+            await this.writeRawToHandle(handle, fileContent)
             await handle.sync()
         } finally {
             await handle.close()
@@ -175,21 +206,89 @@ export class MutexJsonStore<T> {
         await fs.rename(tmpPath, this.filePath)
     }
 
-    private async readFileOrNull(filePath: string): Promise<string | null> {
+    protected async ensureDirectory(): Promise<void> {
+        await fs.mkdir(this.dirPath, { recursive: true })
+    }
+
+    protected async readFileOrNull(filePath: string): Promise<TFileContent | null> {
         try {
-            return await fs.readFile(filePath, { encoding: 'utf8' })
+            return await this.readExistingFile(filePath)
         } catch (err: unknown) {
             const code = (err as NodeErrorWithCode).code
+
             if (code === 'ENOENT') return null
+
             throw err
         }
     }
 
-    private safeParse(raw: string): T | null {
+    protected async writeRawFile(filePath: string, fileContent: TFileContent): Promise<void> {
+        if (typeof fileContent === 'string') {
+            await fs.writeFile(filePath, fileContent, { encoding: 'utf8' })
+            return
+        }
+
+        await fs.writeFile(filePath, fileContent)
+    }
+
+    protected async writeRawToHandle(handle: FileHandle, fileContent: TFileContent): Promise<void> {
+        if (typeof fileContent === 'string') {
+            await handle.writeFile(fileContent, { encoding: 'utf8' })
+            return
+        }
+
+        await handle.writeFile(fileContent)
+    }
+
+    protected createTempFileName(): string {
+        return `.tmp.${Date.now()}.${crypto.randomBytes(6).toString('hex')}${this.getTempFileExtension()}`
+    }
+
+    protected createCorruptBackupPath(): string {
+        return `${this.filePath}.corrupt.${Date.now()}.bak`
+    }
+
+    protected getTempFileExtension(): string {
+        return ''
+    }
+
+    protected abstract serialize(value: T): TFileContent
+
+    protected abstract deserialize(raw: TFileContent): T | null
+
+    protected abstract readExistingFile(filePath: string): Promise<TFileContent>
+}
+
+type MutexJsonStoreOptions<T> = MutexFileStoreOptions<T, string> & {
+    jsonIndent?: number
+}
+
+export class MutexJsonStore<T> extends MutexFileStore<T, string> {
+    private readonly jsonIndent: number
+
+    public constructor(options: MutexJsonStoreOptions<T>) {
+        super(options)
+
+        this.jsonIndent = options.jsonIndent ?? 2
+    }
+
+    protected serialize(value: T): string {
+        return `${JSON.stringify(value, null, this.jsonIndent)}\n`
+    }
+
+    protected deserialize(raw: string): T | null {
         try {
             return JSON.parse(raw) as T
         } catch {
             return null
         }
+    }
+
+    protected async readExistingFile(filePath: string): Promise<string> {
+        return await fs.readFile(filePath, { encoding: 'utf8' })
+    }
+
+    protected getTempFileExtension(): string {
+        return '.json'
     }
 }
