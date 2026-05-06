@@ -159,18 +159,20 @@ export class ExtVisitsStore extends visits.VisitsStore {
 
     protected createSiteKey(hostname: string, port: string): string {
         const hostKey = hostname
+            .trim()
             .toLowerCase()
             .replace(/\.$/, "")
             .replace(/^www\./, "")
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-+|-+$/g, "")
-            .replace(/-+/g, "-")
 
-        if (!hostKey) {
+        if (!hostKey || !this.isValidExternalHostname(hostKey)) {
             return ""
         }
 
-        return port ? `${hostKey}-${port}` : hostKey
+        if (!port) {
+            return hostKey
+        }
+
+        return `${hostKey}__port-${port}`
     }
 
     protected safeDecode(value: string): string {
