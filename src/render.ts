@@ -33,7 +33,10 @@ type RenderState = {
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_ALLOWED_ORIGINS = ["https://kittycrypto.gg"];
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://kittycrypto.gg",
+  "https://kittycrow.dev"
+];
 
 let browserPromise: Promise<Browser> | null = null;
 
@@ -364,6 +367,7 @@ export async function renderPage(
 
 function getExecutablePath(config: RenderConfig): string {
   const fromConfig = config.executablePath?.trim();
+
   if (fromConfig) {
     return fromConfig;
   }
@@ -381,6 +385,16 @@ function getExecutablePath(config: RenderConfig): string {
   );
 }
 
+function getRequestRenderConfig(config: RenderConfig): RenderConfig {
+  return {
+    ...config,
+    allowedOrigins: config.allowedOrigins?.length
+      ? config.allowedOrigins
+      : DEFAULT_ALLOWED_ORIGINS,
+    executablePath: config.executablePath ?? process.env.CHROME_PATH
+  };
+}
+
 export async function handleRenderRequest(
   request: Request,
   config: RenderConfig = {}
@@ -391,10 +405,7 @@ export async function handleRenderRequest(
     const job = await readRenderJob(request);
     const result = await renderPage(
       job,
-      {
-        allowedOrigins: ["https://kittycrypto.gg"],
-        executablePath: process.env.CHROME_PATH
-      }
+      getRequestRenderConfig(config)
     );
 
     return new Response(result.html, {
