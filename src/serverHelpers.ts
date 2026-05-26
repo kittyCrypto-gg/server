@@ -256,7 +256,7 @@ export async function updateUsersFile(
 
 export function registerPage(error = "", apiKey = ""): string {
     const registerTemplate = fs.readFileSync(
-        path.resolve(__dirname, "../ui/register.html"),
+        path.resolve(import.meta.dir, "../ui/register.html"),
         "utf-8"
     );
 
