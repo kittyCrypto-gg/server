@@ -1,10 +1,12 @@
 {
   "name": "kittycrypto",
   "version": "1.0.0",
-  "description": "Backend for [https://kittycrypto.gg](https://kittycrypto.gg) 🐾",
+  "description": "Backend for https://kittycrypto.gg",
   "main": "index.js",
+  "packageManager": "bun@1.2.18",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "check": "bunx tsc --noEmit",
+    "validate": "bun run check"
   },
   "keywords": [],
   "author": "",
@@ -29,12 +31,11 @@
     "feed": "^5.1.0",
     "fs-extra": "^11.3.3",
     "gifenc": "^1.0.3",
-    "gifuct-js": "^2.1.2",
+    "gifuct-js": "^1.2.1",
     "gray-matter": "^4.0.3",
     "jpeg-js": "^0.4.4",
     "jsdom": "^27.4.0",
     "node-fetch": "^3.3.2",
-    "omggif": "^1.0.10",
     "openai": "^6.15.0",
     "protobufjs": "^8.0.3",
     "puppeteer": "^24.37.1",
@@ -52,7 +53,7 @@
     "@types/jpeg-js": "^0.3.0",
     "@types/jsdom": "^27.0.0",
     "@types/node": "^25.3.2",
-    "@types/omggif": "^1.0.5",
+    "@types/omggif": "^0.1.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }
