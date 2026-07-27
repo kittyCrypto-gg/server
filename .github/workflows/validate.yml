@@ -20,6 +20,23 @@ jobs:
         with:
           bun-version: 1.2.18
 
-      - run: bun install
+      - name: Install dependencies
+        run: |
+          set -o pipefail
+          bun install 2>&1 | tee install.log
 
-      - run: bun run validate
+      - name: Validate source
+        run: |
+          set -o pipefail
+          bun run validate 2>&1 | tee validate.log
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-logs
+          path: |
+            install.log
+            validate.log
+          if-no-files-found: ignore
+          retention-days: 3
