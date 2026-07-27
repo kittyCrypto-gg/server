@@ -1,17 +1,22 @@
 {
-  "name": "kittycrypto",
+  "name": "@kittycrypto/server",
   "version": "1.0.0",
-  "description": "Backend for https://kittycrypto.gg",
-  "main": "index.js",
+  "private": true,
+  "type": "module",
+  "description": "Shared KittyCrypto server and storage primitives.",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "packageManager": "bun@1.2.18",
   "scripts": {
     "check": "bunx tsc --noEmit",
-    "validate": "bun run check"
+    "test": "bun test",
+    "validate": "bun run check && bun test"
   },
   "keywords": [],
-  "author": "",
+  "author": "Kitty Crow, https://kittycrow.dev",
   "license": "ISC",
-  "private": "true",
   "dependencies": {
     "@cf-wasm/png": "^0.3.2",
     "@cf-wasm/resvg": "^0.3.3",
