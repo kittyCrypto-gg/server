@@ -242,16 +242,20 @@ async function installTracking(page: Page): Promise<void> {
 
     if (typeof window.fetch === "function") {
       const realFetch = window.fetch.bind(window);
+      const trackedFetch = Object.assign(
+        async (...args: Parameters<typeof window.fetch>): Promise<Response> => {
+          begin();
 
-      window.fetch = async (...args) => {
-        begin();
+          try {
+            return await realFetch(...args);
+          } finally {
+            end();
+          }
+        },
+        window.fetch
+      );
 
-        try {
-          return await realFetch(...args);
-        } finally {
-          end();
-        }
-      };
+      window.fetch = trackedFetch;
     }
 
     if (typeof XMLHttpRequest !== "undefined") {
