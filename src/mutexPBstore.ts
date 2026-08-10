@@ -94,7 +94,7 @@ export class MutexProtoBuffStore<T> extends MutexFileStore<T, Buffer> {
         return await fs.readFile(filePath)
     }
 
-    protected getTempFileExtension(): string {
+    protected override getTempFileExtension(): string {
         return '.pb'
     }
 }
