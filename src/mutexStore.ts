@@ -1,5 +1,5 @@
 import { promises as fs } from 'fs'
-import { FileHandle } from 'fs/promises'
+import type { FileHandle } from 'fs/promises'
 import * as crypto from 'crypto'
 import * as path from 'path'
 
@@ -119,7 +119,7 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
     protected readonly initialValue: () => T
     protected readonly mutex: AsyncMutex
     protected readonly lockfile: Lockfile
-    protected readonly onCorrupt?: (args: CorruptStoreArgs<TFileContent>) => void
+    protected readonly onCorrupt: ((args: CorruptStoreArgs<TFileContent>) => void) | undefined
 
     public constructor(options: MutexFileStoreOptions<T, TFileContent>) {
         this.filePath = options.filePath
@@ -288,7 +288,7 @@ export class MutexJsonStore<T> extends MutexFileStore<T, string> {
         return await fs.readFile(filePath, { encoding: 'utf8' })
     }
 
-    protected getTempFileExtension(): string {
+    protected override getTempFileExtension(): string {
         return '.json'
     }
 }
