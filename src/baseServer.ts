@@ -1,4 +1,5 @@
-import express, { Request, Response, Express } from "express";
+import express from "express";
+import type { Request, Response, Express } from "express";
 import bodyParser from "body-parser";
 import process from "process";
 import https from "https";
@@ -31,9 +32,9 @@ class Server {
   protected server: https.Server;
   protected readonly host: string;
   protected port: number | undefined;
-  protected privateKeyPath = process.env.PRIVKEY_PATH || undefined;
-  protected certificatePath = process.env.CERT_PATH || undefined;
-  protected chainPath = process.env.CHAIN_PATH || undefined;
+  protected privateKeyPath = process.env["PRIVKEY_PATH"] || undefined;
+  protected certificatePath = process.env["CERT_PATH"] || undefined;
+  protected chainPath = process.env["CHAIN_PATH"] || undefined;
 
   private allowedOrigins = new Set<string>([]);
   private allowedMethods = new Set<methods>(["GET"]);
