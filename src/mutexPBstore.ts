@@ -22,7 +22,7 @@ export type MutexProtoBuffStoreOptions<T> = {
     codec: ProtoBuffCodec<T>
 }
 
-export type ProtoBuffObjectCodecOptions<T extends Record<string, unknown>> = {
+export type ProtoBuffObjectCodecOptions = {
     messageType: Type
     conversionOptions?: IConversionOptions
     validate?: boolean
@@ -33,7 +33,7 @@ export class ProtoBuffObjectCodec<T extends Record<string, unknown>> implements 
     private readonly conversionOptions: IConversionOptions
     private readonly validateBeforeWrite: boolean
 
-    public constructor(options: ProtoBuffObjectCodecOptions<T>) {
+    public constructor(options: ProtoBuffObjectCodecOptions) {
         this.messageType = options.messageType
         this.conversionOptions = options.conversionOptions ?? {
             longs: String,

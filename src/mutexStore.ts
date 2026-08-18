@@ -80,8 +80,11 @@ class Lockfile {
             const handle = await fs.open(this.lockPath, 'wx')
 
             try {
+                // The lock is established by O_EXCL file creation. Persisting the
+                // diagnostic contents with fsync adds synchronous disk latency but
+                // does not strengthen mutual exclusion. A crash may leave a stale
+                // lock either way, so durability belongs to the data file, not here.
                 await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`, { encoding: 'utf8' })
-                await handle.sync()
             } finally {
                 await handle.close()
             }
@@ -135,39 +138,15 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
     }
 
     public async read(): Promise<T> {
-        await this.ensureDirectory()
-
-        const raw = await this.readFileOrNull(this.filePath)
-
-        if (raw === null) {
-            const initial = this.initialValue()
-
-            await this.atomicWrite(initial)
-
-            return initial
-        }
-
-        const parsed = this.deserialize(raw)
-
-        if (parsed === null) {
-            const backupPath = this.createCorruptBackupPath()
-
-            await this.writeRawFile(backupPath, raw)
-            this.onCorrupt?.({ filePath: this.filePath, raw, backupPath })
-
-            const initial = this.initialValue()
-
-            await this.atomicWrite(initial)
-
-            return initial
-        }
-
-        return parsed
+        return await this.load(true)
     }
 
     public async update(update: (current: T) => T | Promise<T>): Promise<T> {
         return await this.withStoreLock(async () => {
-            const current = await this.read()
+            // A missing or recoverably corrupt store should feed the initial value
+            // straight into the mutation. Writing that initial value first only to
+            // overwrite it immediately doubles durable I/O on first mutation.
+            const current = await this.load(false)
             const next = await update(current)
 
             await this.atomicWrite(next)
@@ -198,6 +177,7 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
 
         try {
             await this.writeRawToHandle(handle, fileContent)
+            // The data file remains synchronously flushed before atomic rename.
             await handle.sync()
         } finally {
             await handle.close()
@@ -257,6 +237,35 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
     protected abstract deserialize(raw: TFileContent): T | null
 
     protected abstract readExistingFile(filePath: string): Promise<TFileContent>
+
+    private async load(persistInitial: boolean): Promise<T> {
+        await this.ensureDirectory()
+
+        const raw = await this.readFileOrNull(this.filePath)
+
+        if (raw === null) {
+            const initial = this.initialValue()
+
+            if (persistInitial) await this.atomicWrite(initial)
+
+            return initial
+        }
+
+        const parsed = this.deserialize(raw)
+
+        if (parsed !== null) return parsed
+
+        const backupPath = this.createCorruptBackupPath()
+
+        await this.writeRawFile(backupPath, raw)
+        this.onCorrupt?.({ filePath: this.filePath, raw, backupPath })
+
+        const initial = this.initialValue()
+
+        if (persistInitial) await this.atomicWrite(initial)
+
+        return initial
+    }
 }
 
 type MutexJsonStoreOptions<T> = MutexFileStoreOptions<T, string> & {
