@@ -69,45 +69,32 @@ export class ProtoBuffObjectCodec<T extends Record<string, unknown>> implements 
     }
 }
 
-export class MutexProtoBuffStore<T> {
-    private readonly store: MutexFileStore<T>
+export class MutexProtoBuffStore<T> extends MutexFileStore<T, Buffer> {
+    private readonly codec: ProtoBuffCodec<T>
 
     public constructor(options: MutexProtoBuffStoreOptions<T>) {
-        this.store = new MutexFileStore<T>({
-            filePath: options.filePath,
-            initialValue: options.initialValue,
-            lockTimeoutMs: options.lockTimeoutMs,
-            lockRetryDelayMs: options.lockRetryDelayMs,
-            onCorrupt: options.onCorrupt === undefined
-                ? undefined
-                : ({ filePath, raw, backupPath }) => options.onCorrupt?.({
-                    filePath,
-                    raw,
-                    backupPath
-                }),
-            serialize: value => Buffer.from(options.codec.encode(value)),
-            parse: raw => options.codec.decode(raw)
-        })
+        super(options)
+
+        this.codec = options.codec
     }
 
-    public async read(): Promise<T> {
-        return await this.store.read()
+    protected serialize(value: T): Buffer {
+        return Buffer.from(this.codec.encode(value))
     }
 
-    public async update(mutator: (value: T) => T | Promise<T>): Promise<T> {
-        return await this.store.update(mutator)
-    }
-
-    public async write(value: T): Promise<T> {
-        return await this.store.update(() => value)
-    }
-
-    public async exists(): Promise<boolean> {
+    protected deserialize(raw: Buffer): T | null {
         try {
-            await fs.access(this.store.filePath)
-            return true
+            return this.codec.decode(raw)
         } catch {
-            return false
+            return null
         }
+    }
+
+    protected async readExistingFile(filePath: string): Promise<Buffer> {
+        return await fs.readFile(filePath)
+    }
+
+    protected override getTempFileExtension(): string {
+        return '.pb'
     }
 }
