@@ -22,7 +22,7 @@ export type MutexProtoBuffStoreOptions<T> = {
     codec: ProtoBuffCodec<T>
 }
 
-export type ProtoBuffObjectCodecOptions<T extends Record<string, unknown>> = {
+export type ProtoBuffObjectCodecOptions = {
     messageType: Type
     conversionOptions?: IConversionOptions
     validate?: boolean
@@ -33,7 +33,7 @@ export class ProtoBuffObjectCodec<T extends Record<string, unknown>> implements 
     private readonly conversionOptions: IConversionOptions
     private readonly validateBeforeWrite: boolean
 
-    public constructor(options: ProtoBuffObjectCodecOptions<T>) {
+    public constructor(options: ProtoBuffObjectCodecOptions) {
         this.messageType = options.messageType
         this.conversionOptions = options.conversionOptions ?? {
             longs: String,
@@ -69,32 +69,45 @@ export class ProtoBuffObjectCodec<T extends Record<string, unknown>> implements 
     }
 }
 
-export class MutexProtoBuffStore<T> extends MutexFileStore<T, Buffer> {
-    private readonly codec: ProtoBuffCodec<T>
+export class MutexProtoBuffStore<T> {
+    private readonly store: MutexFileStore<T>
 
     public constructor(options: MutexProtoBuffStoreOptions<T>) {
-        super(options)
-
-        this.codec = options.codec
+        this.store = new MutexFileStore<T>({
+            filePath: options.filePath,
+            initialValue: options.initialValue,
+            lockTimeoutMs: options.lockTimeoutMs,
+            lockRetryDelayMs: options.lockRetryDelayMs,
+            onCorrupt: options.onCorrupt === undefined
+                ? undefined
+                : ({ filePath, raw, backupPath }) => options.onCorrupt?.({
+                    filePath,
+                    raw,
+                    backupPath
+                }),
+            serialize: value => Buffer.from(options.codec.encode(value)),
+            parse: raw => options.codec.decode(raw)
+        })
     }
 
-    protected serialize(value: T): Buffer {
-        return Buffer.from(this.codec.encode(value))
+    public async read(): Promise<T> {
+        return await this.store.read()
     }
 
-    protected deserialize(raw: Buffer): T | null {
+    public async update(mutator: (value: T) => T | Promise<T>): Promise<T> {
+        return await this.store.update(mutator)
+    }
+
+    public async write(value: T): Promise<T> {
+        return await this.store.update(() => value)
+    }
+
+    public async exists(): Promise<boolean> {
         try {
-            return this.codec.decode(raw)
+            await fs.access(this.store.filePath)
+            return true
         } catch {
-            return null
+            return false
         }
-    }
-
-    protected async readExistingFile(filePath: string): Promise<Buffer> {
-        return await fs.readFile(filePath)
-    }
-
-    protected override getTempFileExtension(): string {
-        return '.pb'
     }
 }
