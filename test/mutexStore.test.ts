@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm } from 'fs/promises'
-import { tmpdir } from 'os'
+import { mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises'
+import { hostname, tmpdir } from 'os'
 import { join } from 'path'
 import { MutexJsonStore } from '../src/mutexStore'
 
@@ -24,6 +24,14 @@ const root = async (): Promise<string> => {
     roots.push(value)
     return value
 }
+
+const storeAt = (file: string, lockTimeoutMs = 5_000): MutexJsonStore<{ count: number }> =>
+    new MutexJsonStore<{ count: number }>({
+        filePath: file,
+        initialValue: () => ({ count: 0 }),
+        lockTimeoutMs,
+        lockRetryDelayMs: 5,
+    })
 
 test('first update persists only the final value', async () => {
     const dir = await root()
@@ -54,14 +62,8 @@ test('read still materialises an initial store', async () => {
 test('independent store instances serialise updates through the lockfile', async () => {
     const dir = await root()
     const file = join(dir, 'state.json')
-    const a = new MutexJsonStore<{ count: number }>({
-        filePath: file,
-        initialValue: () => ({ count: 0 }),
-    })
-    const b = new MutexJsonStore<{ count: number }>({
-        filePath: file,
-        initialValue: () => ({ count: 0 }),
-    })
+    const a = storeAt(file)
+    const b = storeAt(file)
 
     await Promise.all(Array.from({ length: 20 }, async (_, index) => {
         const store = index % 2 === 0 ? a : b
@@ -69,4 +71,47 @@ test('independent store instances serialise updates through the lockfile', async
     }))
 
     expect(await a.read()).toEqual({ count: 20 })
+})
+
+test('dead legacy lock owner is reclaimed automatically', async () => {
+    const dir = await root()
+    const file = join(dir, 'state.json')
+    await writeFile(`${file}.lock`, `999999\n${new Date().toISOString()}\n`)
+
+    expect(await storeAt(file, 500).update((current) => ({ count: current.count + 1 }))).toEqual({ count: 1 })
+})
+
+test('empty legacy lock from before the current boot is reclaimed automatically', async () => {
+    const dir = await root()
+    const file = join(dir, 'state.json')
+    const lock = `${file}.lock`
+    await writeFile(lock, '')
+    await utimes(lock, new Date(0), new Date(0))
+
+    expect(await storeAt(file, 500).update((current) => ({ count: current.count + 1 }))).toEqual({ count: 1 })
+})
+
+test('live legacy lock owner is never stolen', async () => {
+    const dir = await root()
+    const file = join(dir, 'state.json')
+    await writeFile(`${file}.lock`, `${process.pid}\n${new Date().toISOString()}\n`)
+
+    await expect(storeAt(file, 60).update((current) => ({ count: current.count + 1 })))
+        .rejects.toThrow('MutexFileStore lock timeout')
+})
+
+test('PID reuse cannot keep a dead owner lock alive on Linux', async () => {
+    const dir = await root()
+    const file = join(dir, 'state.json')
+    await writeFile(`${file}.lock`, `${JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        host: hostname(),
+        bootId: null,
+        processStart: 'not-the-current-process-start',
+        createdAt: Date.now(),
+        token: 'stale-pid-reuse-test',
+    })}\n`)
+
+    expect(await storeAt(file, 500).update((current) => ({ count: current.count + 1 }))).toEqual({ count: 1 })
 })
