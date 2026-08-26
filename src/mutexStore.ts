@@ -9,6 +9,8 @@ type NodeErrorWithCode = Error & { code?: string }
 
 type StoreFileContent = string | Buffer
 
+export type CorruptionPolicy = 'recover' | 'throw'
+
 type CorruptStoreArgs<TFileContent extends StoreFileContent> = {
     filePath: string
     raw: TFileContent
@@ -21,6 +23,10 @@ type MutexFileStoreOptions<T, TFileContent extends StoreFileContent> = {
     lockTimeoutMs?: number
     lockRetryDelayMs?: number
     onCorrupt?: (args: CorruptStoreArgs<TFileContent>) => void
+    /** POSIX mode used for state, temp, backup and lock files. Defaults to private owner-only access. */
+    fileMode?: number
+    /** Recover with initialValue by default; security-critical stores can fail closed instead. */
+    corruptionPolicy?: CorruptionPolicy
 }
 
 type OwnedLockMetadata = {
@@ -131,7 +137,12 @@ class Lockfile {
     private readonly bootId = linuxBootId()
     private readonly ownProcessStart = processStartIdentity(process.pid)
 
-    public constructor(targetFilePath: string, timeoutMs: number, retryDelayMs: number) {
+    public constructor(
+        targetFilePath: string,
+        timeoutMs: number,
+        retryDelayMs: number,
+        private readonly fileMode: number,
+    ) {
         this.lockPath = `${targetFilePath}.lock`
         this.reapPath = `${this.lockPath}.reap`
         this.timeoutMs = timeoutMs
@@ -179,7 +190,11 @@ class Lockfile {
         }
         const candidate = `${this.lockPath}.candidate.${process.pid}.${metadata.token}`
 
-        await fs.writeFile(candidate, `${JSON.stringify(metadata)}\n`, { encoding: 'utf8', flag: 'wx' })
+        await fs.writeFile(candidate, `${JSON.stringify(metadata)}\n`, {
+            encoding: 'utf8',
+            flag: 'wx',
+            mode: this.fileMode,
+        })
         try {
             try {
                 // Publish only a fully-written owner record. A hard link is atomic:
@@ -334,6 +349,8 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
     protected readonly mutex: AsyncMutex
     protected readonly lockfile: Lockfile
     protected readonly onCorrupt: ((args: CorruptStoreArgs<TFileContent>) => void) | undefined
+    private readonly fileMode: number
+    private readonly corruptionPolicy: CorruptionPolicy
 
     public constructor(options: MutexFileStoreOptions<T, TFileContent>) {
         this.filePath = options.filePath
@@ -343,8 +360,14 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
 
         const lockTimeoutMs = options.lockTimeoutMs ?? 5_000
         const lockRetryDelayMs = options.lockRetryDelayMs ?? 25
+        const fileMode = options.fileMode ?? 0o600
+        if (!Number.isSafeInteger(fileMode) || fileMode < 0 || fileMode > 0o777) {
+            throw new Error('MutexFileStore fileMode must be a POSIX permission mode from 0000 to 0777')
+        }
 
-        this.lockfile = new Lockfile(this.filePath, lockTimeoutMs, lockRetryDelayMs)
+        this.fileMode = fileMode
+        this.corruptionPolicy = options.corruptionPolicy ?? 'recover'
+        this.lockfile = new Lockfile(this.filePath, lockTimeoutMs, lockRetryDelayMs, this.fileMode)
         this.onCorrupt = options.onCorrupt
     }
 
@@ -384,7 +407,7 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
         const fileContent = this.serialize(value)
         const tmpPath = path.join(this.dirPath, this.createTempFileName())
 
-        const handle = await fs.open(tmpPath, 'w')
+        const handle = await fs.open(tmpPath, 'w', this.fileMode)
 
         try {
             await this.writeRawToHandle(handle, fileContent)
@@ -415,11 +438,11 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
 
     protected async writeRawFile(filePath: string, fileContent: TFileContent): Promise<void> {
         if (typeof fileContent === 'string') {
-            await fs.writeFile(filePath, fileContent, { encoding: 'utf8' })
+            await fs.writeFile(filePath, fileContent, { encoding: 'utf8', mode: this.fileMode })
             return
         }
 
-        await fs.writeFile(filePath, fileContent)
+        await fs.writeFile(filePath, fileContent, { mode: this.fileMode })
     }
 
     protected async writeRawToHandle(handle: FileHandle, fileContent: TFileContent): Promise<void> {
@@ -470,6 +493,9 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
 
         await this.writeRawFile(backupPath, raw)
         this.onCorrupt?.({ filePath: this.filePath, raw, backupPath })
+        if (this.corruptionPolicy === 'throw') {
+            throw new Error(`MutexFileStore detected corrupt state at ${this.filePath}; backup written to ${backupPath}`)
+        }
 
         const initial = this.initialValue()
 
