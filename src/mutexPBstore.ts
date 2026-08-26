@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs'
 import type { IConversionOptions, Type } from 'protobufjs'
-import { MutexFileStore } from './mutexStore'
+import { MutexFileStore, type CorruptionPolicy } from './mutexStore'
 
 type CorruptProtoBuffStoreArgs = {
     filePath: string
@@ -19,6 +19,8 @@ export type MutexProtoBuffStoreOptions<T> = {
     lockTimeoutMs?: number
     lockRetryDelayMs?: number
     onCorrupt?: (args: CorruptProtoBuffStoreArgs) => void
+    fileMode?: number
+    corruptionPolicy?: CorruptionPolicy
     codec: ProtoBuffCodec<T>
 }
 
