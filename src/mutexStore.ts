@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs'
-import type { FileHandle, Stats } from 'fs/promises'
+import type { Stats } from 'fs'
+import type { FileHandle } from 'fs/promises'
 import * as crypto from 'crypto'
 import { hostname, uptime } from 'os'
 import * as path from 'path'
