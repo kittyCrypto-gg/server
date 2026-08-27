@@ -9,6 +9,8 @@ type NodeErrorWithCode = Error & { code?: string }
 
 type StoreFileContent = string | Buffer
 
+export type CorruptionPolicy = 'recover' | 'throw'
+
 const DEFAULT_FILE_MODE = 0o600
 const DEFAULT_DIR_MODE = 0o700
 
@@ -25,6 +27,7 @@ type MutexFileStoreOptions<T, TFileContent extends StoreFileContent> = {
     lockRetryDelayMs?: number
     fileMode?: number
     dirMode?: number
+    corruptionPolicy?: CorruptionPolicy
     onCorrupt?: (args: CorruptStoreArgs<TFileContent>) => void
 }
 
@@ -360,6 +363,7 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
     protected readonly onCorrupt: ((args: CorruptStoreArgs<TFileContent>) => void) | undefined
     protected readonly fileMode: number
     protected readonly dirMode: number
+    private readonly corruptionPolicy: CorruptionPolicy
 
     public constructor(options: MutexFileStoreOptions<T, TFileContent>) {
         this.filePath = options.filePath
@@ -368,6 +372,7 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
         this.mutex = new AsyncMutex()
         this.fileMode = permissionMode(options.fileMode, DEFAULT_FILE_MODE, 'MutexFileStore fileMode')
         this.dirMode = permissionMode(options.dirMode, DEFAULT_DIR_MODE, 'MutexFileStore dirMode')
+        this.corruptionPolicy = options.corruptionPolicy ?? 'recover'
 
         const lockTimeoutMs = options.lockTimeoutMs ?? 5_000
         const lockRetryDelayMs = options.lockRetryDelayMs ?? 25
@@ -503,6 +508,9 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
 
         await this.writeRawFile(backupPath, raw)
         this.onCorrupt?.({ filePath: this.filePath, raw, backupPath })
+        if (this.corruptionPolicy === 'throw') {
+            throw new Error(`MutexFileStore detected corrupt state at ${this.filePath}; backup written to ${backupPath}`)
+        }
 
         const initial = this.initialValue()
 
