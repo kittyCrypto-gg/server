@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises'
+import { chmod, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'fs/promises'
 import { hostname, tmpdir } from 'os'
 import { join } from 'path'
 import { MutexJsonStore } from '../src/mutexStore'
@@ -33,6 +33,8 @@ const storeAt = (file: string, lockTimeoutMs = 5_000): MutexJsonStore<{ count: n
         lockRetryDelayMs: 5,
     })
 
+const permissions = async (file: string): Promise<number> => (await stat(file)).mode & 0o777
+
 test('first update persists only the final value', async () => {
     const dir = await root()
     const file = join(dir, 'state.json')
@@ -57,6 +59,40 @@ test('read still materialises an initial store', async () => {
     expect(await store.read()).toEqual({ count: 7 })
     expect(store.writes).toBe(1)
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ count: 7 })
+})
+
+test('store data, lock and corruption files remain owner-only', async () => {
+    const parent = await root()
+    const dir = join(parent, 'private-state')
+    const file = join(dir, 'state.json')
+    let backupPath: string | null = null
+    const store = new MutexJsonStore<{ count: number }>({
+        filePath: file,
+        initialValue: () => ({ count: 0 }),
+        onCorrupt: value => { backupPath = value.backupPath },
+    })
+
+    let lockMode: number | null = null
+    await store.update(async current => {
+        lockMode = await permissions(`${file}.lock`)
+        return { count: current.count + 1 }
+    })
+
+    expect(lockMode).toBe(0o600)
+    expect(await permissions(file)).toBe(0o600)
+    expect(await permissions(dir)).toBe(0o700)
+
+    await chmod(file, 0o666)
+    expect(await permissions(file)).toBe(0o666)
+    await store.read()
+    expect(await permissions(file)).toBe(0o600)
+
+    await writeFile(file, '{broken json\n')
+    await chmod(file, 0o666)
+    expect(await store.read()).toEqual({ count: 0 })
+    expect(backupPath).not.toBeNull()
+    expect(await permissions(backupPath!)).toBe(0o600)
+    expect(await permissions(file)).toBe(0o600)
 })
 
 test('independent store instances serialise updates through the lockfile', async () => {
