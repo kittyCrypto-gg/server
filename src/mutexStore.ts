@@ -9,6 +9,9 @@ type NodeErrorWithCode = Error & { code?: string }
 
 type StoreFileContent = string | Buffer
 
+const DEFAULT_FILE_MODE = 0o600
+const DEFAULT_DIR_MODE = 0o700
+
 type CorruptStoreArgs<TFileContent extends StoreFileContent> = {
     filePath: string
     raw: TFileContent
@@ -20,6 +23,8 @@ type MutexFileStoreOptions<T, TFileContent extends StoreFileContent> = {
     initialValue: () => T
     lockTimeoutMs?: number
     lockRetryDelayMs?: number
+    fileMode?: number
+    dirMode?: number
     onCorrupt?: (args: CorruptStoreArgs<TFileContent>) => void
 }
 
@@ -60,6 +65,14 @@ class AsyncMutex {
             release!()
         }
     }
+}
+
+const permissionMode = (value: number | undefined, fallback: number, label: string): number => {
+    const resolved = value ?? fallback
+    if (!Number.isSafeInteger(resolved) || resolved < 0 || resolved > 0o777) {
+        throw new Error(`${label} must be a Unix permission mode between 000 and 777`)
+    }
+    return resolved
 }
 
 const processStartIdentity = async (pid: number): Promise<string | null> => {
@@ -131,7 +144,12 @@ class Lockfile {
     private readonly bootId = linuxBootId()
     private readonly ownProcessStart = processStartIdentity(process.pid)
 
-    public constructor(targetFilePath: string, timeoutMs: number, retryDelayMs: number) {
+    public constructor(
+        targetFilePath: string,
+        timeoutMs: number,
+        retryDelayMs: number,
+        private readonly fileMode: number,
+    ) {
         this.lockPath = `${targetFilePath}.lock`
         this.reapPath = `${this.lockPath}.reap`
         this.timeoutMs = timeoutMs
@@ -179,7 +197,12 @@ class Lockfile {
         }
         const candidate = `${this.lockPath}.candidate.${process.pid}.${metadata.token}`
 
-        await fs.writeFile(candidate, `${JSON.stringify(metadata)}\n`, { encoding: 'utf8', flag: 'wx' })
+        await fs.writeFile(candidate, `${JSON.stringify(metadata)}\n`, {
+            encoding: 'utf8',
+            flag: 'wx',
+            mode: this.fileMode,
+        })
+        await fs.chmod(candidate, this.fileMode)
         try {
             try {
                 // Publish only a fully-written owner record. A hard link is atomic:
@@ -270,6 +293,7 @@ class Lockfile {
                 fs.readFile(filePath, { encoding: 'utf8' }),
                 fs.stat(filePath),
             ])
+            await fs.chmod(filePath, this.fileMode)
             let metadata: OwnedLockMetadata | null = null
             try {
                 metadata = ownedMetadata(JSON.parse(raw))
@@ -334,17 +358,21 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
     protected readonly mutex: AsyncMutex
     protected readonly lockfile: Lockfile
     protected readonly onCorrupt: ((args: CorruptStoreArgs<TFileContent>) => void) | undefined
+    protected readonly fileMode: number
+    protected readonly dirMode: number
 
     public constructor(options: MutexFileStoreOptions<T, TFileContent>) {
         this.filePath = options.filePath
         this.dirPath = path.dirname(options.filePath)
         this.initialValue = options.initialValue
         this.mutex = new AsyncMutex()
+        this.fileMode = permissionMode(options.fileMode, DEFAULT_FILE_MODE, 'MutexFileStore fileMode')
+        this.dirMode = permissionMode(options.dirMode, DEFAULT_DIR_MODE, 'MutexFileStore dirMode')
 
         const lockTimeoutMs = options.lockTimeoutMs ?? 5_000
         const lockRetryDelayMs = options.lockRetryDelayMs ?? 25
 
-        this.lockfile = new Lockfile(this.filePath, lockTimeoutMs, lockRetryDelayMs)
+        this.lockfile = new Lockfile(this.filePath, lockTimeoutMs, lockRetryDelayMs, this.fileMode)
         this.onCorrupt = options.onCorrupt
     }
 
@@ -384,9 +412,10 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
         const fileContent = this.serialize(value)
         const tmpPath = path.join(this.dirPath, this.createTempFileName())
 
-        const handle = await fs.open(tmpPath, 'w')
+        const handle = await fs.open(tmpPath, 'w', this.fileMode)
 
         try {
+            await handle.chmod(this.fileMode)
             await this.writeRawToHandle(handle, fileContent)
             // The data file remains synchronously flushed before atomic rename.
             await handle.sync()
@@ -395,15 +424,19 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
         }
 
         await fs.rename(tmpPath, this.filePath)
+        await fs.chmod(this.filePath, this.fileMode)
     }
 
     protected async ensureDirectory(): Promise<void> {
-        await fs.mkdir(this.dirPath, { recursive: true })
+        await fs.mkdir(this.dirPath, { recursive: true, mode: this.dirMode })
+        await fs.chmod(this.dirPath, this.dirMode)
     }
 
     protected async readFileOrNull(filePath: string): Promise<TFileContent | null> {
         try {
-            return await this.readExistingFile(filePath)
+            const value = await this.readExistingFile(filePath)
+            await fs.chmod(filePath, this.fileMode)
+            return value
         } catch (err: unknown) {
             const code = (err as NodeErrorWithCode).code
 
@@ -415,11 +448,11 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
 
     protected async writeRawFile(filePath: string, fileContent: TFileContent): Promise<void> {
         if (typeof fileContent === 'string') {
-            await fs.writeFile(filePath, fileContent, { encoding: 'utf8' })
-            return
+            await fs.writeFile(filePath, fileContent, { encoding: 'utf8', mode: this.fileMode })
+        } else {
+            await fs.writeFile(filePath, fileContent, { mode: this.fileMode })
         }
-
-        await fs.writeFile(filePath, fileContent)
+        await fs.chmod(filePath, this.fileMode)
     }
 
     protected async writeRawToHandle(handle: FileHandle, fileContent: TFileContent): Promise<void> {
