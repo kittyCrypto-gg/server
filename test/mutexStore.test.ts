@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { chmod, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'fs/promises'
+import { chmod, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'fs/promises'
 import { hostname, tmpdir } from 'os'
 import { join } from 'path'
 import { MutexJsonStore } from '../src/mutexStore'
@@ -93,6 +93,31 @@ test('store data, lock and corruption files remain owner-only', async () => {
     expect(backupPath).not.toBeNull()
     expect(await permissions(backupPath!)).toBe(0o600)
     expect(await permissions(file)).toBe(0o600)
+})
+
+test('security-critical stores fail closed without replacing corrupt state', async () => {
+    const parent = await root()
+    const dir = join(parent, 'security-state')
+    const file = join(dir, 'security.json')
+    await writeFile(file, '{this is not valid json')
+    await chmod(file, 0o666)
+
+    const store = new MutexJsonStore<{ count: number }>({
+        filePath: file,
+        initialValue: () => ({ count: 0 }),
+        corruptionPolicy: 'throw',
+    })
+
+    await expect(store.read()).rejects.toThrow('detected corrupt state')
+    expect(await readFile(file, 'utf8')).toBe('{this is not valid json')
+    expect(await permissions(file)).toBe(0o600)
+    expect(await permissions(dir)).toBe(0o700)
+
+    const backups = (await readdir(dir)).filter(name => name.startsWith('security.json.corrupt.'))
+    expect(backups).toHaveLength(1)
+    const backup = join(dir, backups[0]!)
+    expect(await readFile(backup, 'utf8')).toBe('{this is not valid json')
+    expect(await permissions(backup)).toBe(0o600)
 })
 
 test('independent store instances serialise updates through the lockfile', async () => {
