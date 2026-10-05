@@ -101,6 +101,7 @@ server.app.use(express.json())
 server.app.set("trust proxy", true)
 server.addPubCorsRte("/visits/log/*", "POST")
 server.addPubCorsRte("/visits/stats/*", "GET")
+helpers.registerAppDiscoveryEndpoint(server)
 
 // Session store to track active sessions
 const sessionTokens = new Set<string>();
