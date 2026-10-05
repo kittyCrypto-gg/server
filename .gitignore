@@ -10,6 +10,8 @@ superseded/
 node_modules/
 #data folder
 data/
+# runtime app catalogue descriptions
+data/descriptions.json
 #ignore .env file
 .env
 #build

@@ -4,8 +4,10 @@ import fetch from "node-fetch";
 import "dotenv/config";
 
 export type AppSource = "github" | "local";
+export type AppDescriptions = Readonly<Record<string, string>>;
 
 export interface DiscoveredApp {
+    id: string;
     name: string;
     href: string;
     description: string;
@@ -21,7 +23,6 @@ export interface AppDiscoverySnapshot {
 interface GithubRepository {
     name: string;
     full_name: string;
-    description: string | null;
     private: boolean;
     archived: boolean;
     disabled: boolean;
@@ -30,6 +31,7 @@ interface GithubRepository {
 }
 
 const DEFAULT_NGINX_CONFIG_PATH = "/etc/nginx/sites-available/app.kittycrow.dev";
+const DEFAULT_DESCRIPTIONS_PATH = "data/descriptions.json";
 const DEFAULT_GITHUB_OWNER = "kitty-crow";
 const DEFAULT_INDEX_REPOSITORY = "app-kittycrow-dev";
 const DEFAULT_REFRESH_MS = 5 * 60 * 1000;
@@ -40,6 +42,7 @@ let currentSnapshot: AppDiscoverySnapshot = {
     apps: []
 };
 
+let currentDescriptions: AppDescriptions = {};
 let refreshInFlight: Promise<AppDiscoverySnapshot> | null = null;
 let discoveryStarted = false;
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -47,6 +50,11 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null;
 function getNginxConfigPath(): string {
     const configured = process.env.APP_DISCOVERY_NGINX_PATH?.trim();
     return configured || DEFAULT_NGINX_CONFIG_PATH;
+}
+
+function getDescriptionsPath(): string {
+    const configured = process.env.APP_DISCOVERY_DESCRIPTIONS_PATH?.trim();
+    return configured || DEFAULT_DESCRIPTIONS_PATH;
 }
 
 function getGithubOwner(): string {
@@ -72,6 +80,14 @@ function getRefreshMs(): number {
 function canonicalHref(value: string): string {
     const path = value.trim().replace(/^\/+|\/+$/g, "");
     return path ? `/${path}/` : "/";
+}
+
+export function appIdFromHref(href: string): string {
+    return canonicalHref(href)
+        .replace(/^\/+|\/+$/g, "")
+        .split("/")
+        .filter(Boolean)
+        .join("-");
 }
 
 function humaniseRoute(href: string): string {
@@ -151,9 +167,10 @@ export function parseLocalAppsFromNginx(config: string): DiscoveredApp[] {
         const name = sectionTitle || humaniseRoute(href);
 
         apps.set(href, {
+            id: appIdFromHref(href),
             name,
             href,
-            description: `Local service exposed through app.kittycrow.dev${href}`,
+            description: "",
             source: "local"
         });
     }
@@ -168,7 +185,6 @@ function isGithubRepository(value: unknown): value is GithubRepository {
 
     return typeof repo.name === "string"
         && typeof repo.full_name === "string"
-        && (typeof repo.description === "string" || repo.description === null)
         && typeof repo.private === "boolean"
         && typeof repo.archived === "boolean"
         && typeof repo.disabled === "boolean"
@@ -191,10 +207,13 @@ export function githubRepoToApp(
         return null;
     }
 
+    const href = canonicalHref(value.name);
+
     return {
+        id: appIdFromHref(href),
         name: value.name,
-        href: canonicalHref(value.name),
-        description: value.description?.trim() || `GitHub Pages site for ${owner}/${value.name}.`,
+        href,
+        description: "",
         source: "github",
         repository: value.full_name
     };
@@ -291,6 +310,37 @@ async function discoverLocalApps(): Promise<DiscoveredApp[]> {
     return parseLocalAppsFromNginx(config);
 }
 
+function isDescriptionObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function refreshAppDescriptions(): Promise<AppDescriptions> {
+    try {
+        const raw = await fs.promises.readFile(getDescriptionsPath(), "utf8");
+        const payload = JSON.parse(raw) as unknown;
+
+        if (!isDescriptionObject(payload)) {
+            throw new Error("App descriptions JSON must contain an object keyed by app id.");
+        }
+
+        const nextDescriptions: Record<string, string> = {};
+
+        for (const [id, description] of Object.entries(payload)) {
+            if (typeof description !== "string") {
+                throw new Error(`App description for ${id} must be a string.`);
+            }
+
+            nextDescriptions[id] = description.trim();
+        }
+
+        currentDescriptions = nextDescriptions;
+    } catch (error) {
+        console.error(`❌ Failed to load app descriptions from ${getDescriptionsPath()}:`, error);
+    }
+
+    return currentDescriptions;
+}
+
 export function mergeDiscoveredApps(
     githubApps: readonly DiscoveredApp[],
     localApps: readonly DiscoveredApp[]
@@ -299,14 +349,14 @@ export function mergeDiscoveredApps(
 
     for (const app of githubApps) {
         const href = canonicalHref(app.href);
-        apps.set(href, { ...app, href });
+        apps.set(href, { ...app, id: appIdFromHref(href), href });
     }
 
     // Nginx locations take precedence over the generic GitHub Pages fallback,
     // so local applications deliberately replace a GitHub app at the same path.
     for (const app of localApps) {
         const href = canonicalHref(app.href);
-        apps.set(href, { ...app, href });
+        apps.set(href, { ...app, id: appIdFromHref(href), href });
     }
 
     return Array.from(apps.values()).sort((a, b) => {
@@ -317,6 +367,16 @@ export function mergeDiscoveredApps(
 
         return byName || a.href.localeCompare(b.href, "en-GB");
     });
+}
+
+export function applyAppDescriptions(
+    apps: readonly DiscoveredApp[],
+    descriptions: AppDescriptions
+): DiscoveredApp[] {
+    return apps.map((app) => ({
+        ...app,
+        description: descriptions[app.id]?.trim() || ""
+    }));
 }
 
 export function getAppDiscoverySnapshot(): AppDiscoverySnapshot {
@@ -365,9 +425,14 @@ export async function refreshAppDiscovery(): Promise<AppDiscoverySnapshot> {
             ? localResult.value
             : previousLocal;
 
+        const descriptions = await refreshAppDescriptions();
+
         currentSnapshot = {
             generatedAt: new Date().toISOString(),
-            apps: mergeDiscoveredApps(githubApps, localApps)
+            apps: applyAppDescriptions(
+                mergeDiscoveredApps(githubApps, localApps),
+                descriptions
+            )
         };
 
         console.log(`🧭 Discovered ${currentSnapshot.apps.length} applications.`);

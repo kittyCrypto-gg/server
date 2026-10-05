@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import {
+    applyAppDescriptions,
+    appIdFromHref,
     githubRepoToApp,
     mergeDiscoveredApps,
     parseLocalAppsFromNginx,
@@ -53,24 +55,33 @@ server {
 }
 `;
 
+test("app ids are stable route-derived keys", () => {
+    expect(appIdFromHref("/feline/")).toBe("feline");
+    expect(appIdFromHref("/mae/activity/")).toBe("mae-activity");
+    expect(appIdFromHref("/mikuOS/")).toBe("mikuOS");
+});
+
 test("local discovery finds only loopback-backed nginx applications", () => {
     expect(parseLocalAppsFromNginx(nginx)).toEqual([
         {
+            id: "mae-activity",
             name: "Mae Discord Activity",
             href: "/mae/activity/",
-            description: "Local service exposed through app.kittycrow.dev/mae/activity/",
+            description: "",
             source: "local"
         },
         {
+            id: "feline",
             name: "FeLinE Market Tracker",
             href: "/feline/",
-            description: "Local service exposed through app.kittycrow.dev/feline/",
+            description: "",
             source: "local"
         },
         {
+            id: "tarot",
             name: "Tarot WebApp",
             href: "/tarot/",
-            description: "Local service exposed through app.kittycrow.dev/tarot/",
+            description: "",
             source: "local"
         }
     ]);
@@ -80,7 +91,7 @@ test("github discovery accepts only active public non-template Pages repositorie
     const base = {
         name: "vectoriser",
         full_name: "kitty-crow/vectoriser",
-        description: "Converts PNG to SVG",
+        description: "This GitHub description must not be used",
         private: false,
         archived: false,
         disabled: false,
@@ -89,9 +100,10 @@ test("github discovery accepts only active public non-template Pages repositorie
     };
 
     expect(githubRepoToApp(base)).toEqual({
+        id: "vectoriser",
         name: "vectoriser",
         href: "/vectoriser/",
-        description: "Converts PNG to SVG",
+        description: "",
         source: "github",
         repository: "kitty-crow/vectoriser"
     });
@@ -107,16 +119,18 @@ test("github discovery accepts only active public non-template Pages repositorie
 test("merge is alphabetical and local nginx routes override matching github routes", () => {
     const githubApps: DiscoveredApp[] = [
         {
+            id: "vectoriser",
             name: "Vectoriser",
             href: "/vectoriser/",
-            description: "GitHub copy",
+            description: "",
             source: "github",
             repository: "kitty-crow/vectoriser"
         },
         {
+            id: "cube-solver",
             name: "Cube Solver",
             href: "/cube-solver",
-            description: "Cube solver",
+            description: "",
             source: "github",
             repository: "kitty-crow/cube-solver"
         }
@@ -124,38 +138,85 @@ test("merge is alphabetical and local nginx routes override matching github rout
 
     const localApps: DiscoveredApp[] = [
         {
+            id: "vectoriser",
             name: "Vectoriser Local",
             href: "/vectoriser/",
-            description: "Local copy",
+            description: "",
             source: "local"
         },
         {
+            id: "feline",
             name: "FeLinE Market Tracker",
             href: "/feline/",
-            description: "Local service",
+            description: "",
             source: "local"
         }
     ];
 
     expect(mergeDiscoveredApps(githubApps, localApps)).toEqual([
         {
+            id: "cube-solver",
             name: "Cube Solver",
             href: "/cube-solver/",
-            description: "Cube solver",
+            description: "",
             source: "github",
             repository: "kitty-crow/cube-solver"
         },
         {
+            id: "feline",
             name: "FeLinE Market Tracker",
             href: "/feline/",
-            description: "Local service",
+            description: "",
             source: "local"
         },
         {
+            id: "vectoriser",
             name: "Vectoriser Local",
             href: "/vectoriser/",
-            description: "Local copy",
+            description: "",
             source: "local"
+        }
+    ]);
+});
+
+test("descriptions are assigned only from the runtime description map", () => {
+    const apps: DiscoveredApp[] = [
+        {
+            id: "vectoriser",
+            name: "Vectoriser",
+            href: "/vectoriser/",
+            description: "should be replaced",
+            source: "github",
+            repository: "kitty-crow/vectoriser"
+        },
+        {
+            id: "new-app",
+            name: "New App",
+            href: "/new-app/",
+            description: "should also be replaced",
+            source: "github",
+            repository: "kitty-crow/new-app"
+        }
+    ];
+
+    expect(applyAppDescriptions(apps, {
+        vectoriser: "  Runtime controlled description.  "
+    })).toEqual([
+        {
+            id: "vectoriser",
+            name: "Vectoriser",
+            href: "/vectoriser/",
+            description: "Runtime controlled description.",
+            source: "github",
+            repository: "kitty-crow/vectoriser"
+        },
+        {
+            id: "new-app",
+            name: "New App",
+            href: "/new-app/",
+            description: "",
+            source: "github",
+            repository: "kitty-crow/new-app"
         }
     ]);
 });
