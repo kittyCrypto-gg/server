@@ -4,6 +4,7 @@ import { GithubAutoScheduler } from "./blogScheduler";
 import express, { Request, Response } from "express";
 import { ExtVisitsStore } from "./extVisits";
 import * as helpers from "./serverHelpers";
+import { normaliseCommentPage } from "./commentPage";
 import { tokenStore } from "./tokenStore";
 import { TrSites } from "./trustedSites";
 import rateLimiter from "./rateLimiter";
@@ -245,7 +246,7 @@ server.app.get("/comments/load",
     async (req: Request, res: Response) => {
         try {
             const rawPage = typeof req.query.page === "string" ? req.query.page : "";
-            const page = helpers.normaliseCommentPage(decodeURIComponent(rawPage));
+            const page = normaliseCommentPage(decodeURIComponent(rawPage));
 
             console.log("🔍 Loading comments for page:", page);
 
@@ -272,7 +273,7 @@ server.app.get("/comments/load",
             }
 
             const matchingComments = allComments.filter(
-                (comment: CommentData) => helpers.normaliseCommentPage(comment.page) === page
+                (comment: CommentData) => normaliseCommentPage(comment.page) === page
             );
 
             console.log(`📜 Found ${matchingComments.length} comments for page: ${page}`);
