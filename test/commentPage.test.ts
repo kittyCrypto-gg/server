@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normaliseCommentPage } from "../src/serverHelpers";
+import { normaliseCommentPage } from "../src/commentPage";
 
 describe("normaliseCommentPage", () => {
     test("treats clean, slash and legacy html routes as the same page", () => {
