@@ -5,7 +5,7 @@ import Server from "./baseServer";
 import { OpenAI } from "openai";
 import path from "path";
 import fs from "fs";
-import { normaliseCommentPage } from "./serverHelpers";
+import { normaliseCommentPage } from "./commentPage";
 /* @ts-ignore */
 import "dotenv/config";
 
