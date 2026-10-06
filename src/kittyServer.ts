@@ -245,7 +245,7 @@ server.app.get("/comments/load",
     async (req: Request, res: Response) => {
         try {
             const rawPage = typeof req.query.page === "string" ? req.query.page : "";
-            const page = decodeURIComponent(rawPage);
+            const page = helpers.normaliseCommentPage(decodeURIComponent(rawPage));
 
             console.log("🔍 Loading comments for page:", page);
 
@@ -271,7 +271,9 @@ server.app.get("/comments/load",
                 throw new Error("Invalid comment store format.");
             }
 
-            const matchingComments = allComments.filter((comment: CommentData) => comment.page === page);
+            const matchingComments = allComments.filter(
+                (comment: CommentData) => helpers.normaliseCommentPage(comment.page) === page
+            );
 
             console.log(`📜 Found ${matchingComments.length} comments for page: ${page}`);
             res.status(200).json(matchingComments);
