@@ -5,6 +5,7 @@ import Server from "./baseServer";
 import { OpenAI } from "openai";
 import path from "path";
 import fs from "fs";
+import { normaliseCommentPage } from "./serverHelpers";
 /* @ts-ignore */
 import "dotenv/config";
 
@@ -123,7 +124,7 @@ class Comment extends KittyRequest<CommentData> {
 
     const comment: CommentData = {
       ...body,
-      page: decodeURIComponent(body.page),
+      page: normaliseCommentPage(decodeURIComponent(body.page)),
       location:
         typeof body.location === "string" && body.location.trim().length > 0
           ? body.location
