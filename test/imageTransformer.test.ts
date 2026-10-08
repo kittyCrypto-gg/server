@@ -97,4 +97,55 @@ describe("ImageTransformer compatibility", () => {
         });
         expect(createImageTransformErrorBody({ code: "BAD_REQUEST", httpStatus: 400, stage: "parse-source-url", message: "Bad URL" })).toEqual(toImageTransformErrorBody(error));
     });
+    test("preserves all original named exports at the historical import path", async () => {
+        const { readFileSync } = await import("node:fs");
+        const path = await import("node:path");
+        const ts = await import("typescript");
+        const file = path.resolve(import.meta.dir, "../src/imageTransformer.ts");
+        const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+        const names: string[] = [];
+        for (const statement of source.statements) {
+            if (ts.isClassDeclaration(statement) && statement.name && statement.modifiers?.some(mod => mod.kind === ts.SyntaxKind.ExportKeyword)) {
+                names.push(statement.name.text);
+            }
+            if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+                names.push(...statement.exportClause.elements.map(el => el.name.text));
+            }
+        }
+        expect(names.sort()).toEqual([
+            "ImageTransformError", "ImageTransformErrorBody", "ImageTransformErrorDetails",
+            "ImageTransformer", "ImageTransformerOptions", "ResizeSpec", "SupportedFormat",
+            "TransformBytesInput", "TransformErrorCode", "TransformErrorStage", "TransformRemoteUrlInput",
+            "TransformResult", "createImageTransformErrorBody", "toImageTransformErrorBody"
+        ]);
+    });
+
+    test("keeps output codecs for PNG, JPEG, BMP, GIF and TIFF available", async () => {
+        const source = encodePng(Uint8Array.from([255, 50, 0, 255]), 1, 1);
+        const outputs = [
+            ["png", "image/png"],
+            ["jpeg", "image/jpeg"],
+            ["bmp", "image/bmp"],
+            ["gif", "image/gif"],
+            ["tiff", "image/tiff"]
+        ] as const;
+        for (const [format, contentType] of outputs) {
+            const result = await transformer.transformBytes({ bytes: source, format });
+            expect(result.outputFormat).toBe(format);
+            expect(result.contentType).toBe(contentType);
+            expect(result.body.byteLength).toBeGreaterThan(0);
+            expect([result.width, result.height]).toEqual([1, 1]);
+        }
+    });
+
+    test("rejects disallowed remote sources without fetching them", async () => {
+        try {
+            await transformer.transformRemoteUrl({ src: "http://127.0.0.1/private.png" });
+            throw new Error("Expected source policy to reject");
+        } catch (error) {
+            expect(error).toBeInstanceOf(ImageTransformError);
+            expect(error).toMatchObject({ code: "BAD_REQUEST", httpStatus: 403, stage: "validate-source-url" });
+        }
+    });
+
 });
