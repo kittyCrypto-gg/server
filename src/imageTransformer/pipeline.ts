@@ -1,5 +1,5 @@
 import type { TransformerContext } from "./context";
-import type { SupportedFormat, ResizeSpec, RasterImage, SvgImage, DecodedImage, TransformRemoteUrlInput, TransformBytesInput, TransformResult, TransformerLimits, TransformerEncodeOptions, ImageTransformerOptions, TransformErrorCode, TransformErrorStage, ImageTransformErrorDetails, UnknownErrorSummary, ImageTransformErrorBody, ResvgRenderOptions, ResvgInstance, ResvgStatic, CacheIndexEntry, CacheIndex, SvgIntrinsicSize } from "./types";
+import type { TransformRemoteUrlInput, TransformBytesInput, TransformResult } from "./types";
 import { ImageTransformError } from "./errors";
 import { isAllowedImageSourceUrl } from "./sourcePolicy";
 

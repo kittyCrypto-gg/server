@@ -1,5 +1,5 @@
 import type { TransformerContext } from "./context";
-import type { SupportedFormat, ResizeSpec, RasterImage, SvgImage, DecodedImage, TransformRemoteUrlInput, TransformBytesInput, TransformResult, TransformerLimits, TransformerEncodeOptions, ImageTransformerOptions, TransformErrorCode, TransformErrorStage, ImageTransformErrorDetails, UnknownErrorSummary, ImageTransformErrorBody, ResvgRenderOptions, ResvgInstance, ResvgStatic, CacheIndexEntry, CacheIndex, SvgIntrinsicSize } from "./types";
+import type { SupportedFormat, ResizeSpec, TransformResult, CacheIndex } from "./types";
 import { ImageTransformError } from "./errors";
 const IMAGE_CACHE_DIR = "./data/images";
 const IMAGE_CACHE_INDEX_PATH = "./data/images/index.json";

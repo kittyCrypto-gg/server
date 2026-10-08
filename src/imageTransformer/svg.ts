@@ -1,5 +1,5 @@
 import type { TransformerContext } from "./context";
-import type { SupportedFormat, ResizeSpec, RasterImage, SvgImage, DecodedImage, TransformRemoteUrlInput, TransformBytesInput, TransformResult, TransformerLimits, TransformerEncodeOptions, ImageTransformerOptions, TransformErrorCode, TransformErrorStage, ImageTransformErrorDetails, UnknownErrorSummary, ImageTransformErrorBody, ResvgRenderOptions, ResvgInstance, ResvgStatic, CacheIndexEntry, CacheIndex, SvgIntrinsicSize } from "./types";
+import type { ResizeSpec, RasterImage, SvgImage, ResvgStatic, SvgIntrinsicSize } from "./types";
 import { Resvg } from "@cf-wasm/resvg/node";
 const ResvgTyped = Resvg as unknown as ResvgStatic;
 import { decode as decodePng, encode as encodePng } from "@cf-wasm/png";
