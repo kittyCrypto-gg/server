@@ -2,6 +2,7 @@ import type { Request } from "express";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+type NodeErrorWithCode = Error & { code?: string };
 
 export interface BuildManifest {
     version: 1;
