@@ -32,12 +32,12 @@ export interface TrackerContext {
   ): Promise<GitHubCommit[]>;
   genTier(message: string, diff: string): Promise<Exclude<BumpTier, "skip">>;
   getCommits(
-    branch = 'main',
-    sinceDays = 7
+    branch?: string,
+    sinceDays?: number
   ): Promise<Record<RepoIdentifier, RepoHistory>>;
   rebuildAll(
-    branch = 'main',
-    commitsPerFile = 250
+    branch?: string,
+    commitsPerFile?: number
   ): Promise<Record<RepoIdentifier, RepoHistory[]>>;
   getMdVer(repo: RepoIdentifier, branch: string): Promise<{ major: number; readmeSha: string }>;
   fetchCommits(
