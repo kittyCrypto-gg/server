@@ -1,4 +1,3 @@
-import type { TransformerLimits, TransformerEncodeOptions } from "./imageTransformer/types";
 import type { TransformerContext } from "./imageTransformer/context";
 import { transformRemoteUrl as transformRemoteUrl_operation, transformBytes as transformBytes_operation } from "./imageTransformer/pipeline";
 import { resolveSrcUrlWithDetail as resolveSrcUrlWithDetail_operation, parseOptionalUrlHint as parseOptionalUrlHint_operation, fetchRemoteSource as fetchRemoteSource_operation, readResponseBytes as readResponseBytes_operation, resolveSrcUrl as resolveSrcUrl_operation, assertByteBudget as assertByteBudget_operation, assertPixelBudget as assertPixelBudget_operation } from "./imageTransformer/remoteSource";

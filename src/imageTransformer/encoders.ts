@@ -4,7 +4,9 @@ import { ImageTransformError } from "./errors";
 import { decode as decodePng, encode as encodePng } from "@cf-wasm/png";
 import * as jpeg from "jpeg-js";
 import * as BMP from "bmp-js";
+// @ts-ignore missing upstream typings
 import { GIFEncoder, quantize, applyPalette } from "gifenc";
+// @ts-ignore missing upstream typings
 import * as UTIF from "utif";
 
 export async function encodeOutput(

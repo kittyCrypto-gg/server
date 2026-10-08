@@ -1,6 +1,6 @@
 import fs from "fs";
+import { ImageTransformError } from "./errors";
 
-import * as UTIF from "utif";
 
 const ALLOWED_IMAGE_SOURCE_HOSTS = new Set<string>([
   "kittycrypto.gg",

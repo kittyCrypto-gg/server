@@ -1,11 +1,12 @@
 import type { TransformerContext } from "./context";
 import type { SupportedFormat, ResizeSpec, RasterImage, SvgImage, DecodedImage, TransformRemoteUrlInput, TransformBytesInput, TransformResult, TransformerLimits, TransformerEncodeOptions, ImageTransformerOptions, TransformErrorCode, TransformErrorStage, ImageTransformErrorDetails, UnknownErrorSummary, ImageTransformErrorBody, ResvgRenderOptions, ResvgInstance, ResvgStatic, CacheIndexEntry, CacheIndex, SvgIntrinsicSize } from "./types";
-import { ImageTransformError } from "./errors";
+import { ImageTransformError, summariseUnknownError } from "./errors";
 import { decode as decodePng, encode as encodePng } from "@cf-wasm/png";
 import * as jpeg from "jpeg-js";
 import { parseGIF, decompressFrames } from "gifuct-js";
 import { GifReader } from "omggif";
 import * as BMP from "bmp-js";
+// @ts-ignore missing upstream typings
 import * as UTIF from "utif";
 
 export async function decodeImage(ctx: TransformerContext, format: SupportedFormat, bytes: Uint8Array): Promise<DecodedImage> {

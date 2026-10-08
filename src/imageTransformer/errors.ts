@@ -81,7 +81,7 @@ export function createImageTransformErrorBody(args: {
 }
 
 type ErrorRecord = Record<string, unknown>;
-function summariseUnknownError(error: unknown, includeStack: boolean, depth = 0): UnknownErrorSummary {
+export function summariseUnknownError(error: unknown, includeStack: boolean, depth = 0): UnknownErrorSummary {
   if (depth > 4) {
     return {
       name: "CauseChainTruncated",
