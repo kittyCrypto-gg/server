@@ -56,10 +56,13 @@ export function splitMarkdown(
       const line = lines[i];
       const fence = isFenceLine(line);
 
-      if (!inFence && fence) {
+      const openingFence = !inFence && fence !== null;
+      const closingFence = inFence && fence !== null && fenceToken === fence;
+      if (openingFence) {
         inFence = true;
         fenceToken = fence;
-      } else if (inFence && fence && fenceToken === fence) {
+      }
+      if (closingFence) {
         inFence = false;
         fenceToken = null;
       }
