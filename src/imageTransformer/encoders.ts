@@ -15,10 +15,11 @@ export async function encodeOutput(
     format: SupportedFormat,
   ): Promise<{ body: Uint8Array; contentType: string }> {
     try {
-      if (format === "svg" && image.kind !== "svg") throw new Error("Internal: expected svg output");
+      const svgImage = image.kind === "svg" ? image : null;
+      if (format === "svg" && svgImage === null) throw new Error("Internal: expected svg output");
       switch (format) {
         case "svg": {
-          const body = new TextEncoder().encode(image.svgText);
+          const body = new TextEncoder().encode(svgImage!.svgText);
           return { body, contentType: "image/svg+xml" };
         }
         case "png": {
