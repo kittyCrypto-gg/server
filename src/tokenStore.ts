@@ -1,6 +1,6 @@
 import Server from "./baseServer";
 import { MutexProtoBuffStore } from "./mutexPBstore";
-import type { TokenMeta, TokenStoreJson, SessionTokenStoreOpts, SessionTokenSink, TokenStorePb } from "./tokenStore/types";
+import type { TokenMeta, TokenStoreJson, SessionTokenStoreOpts, SessionTokenSink, TokenStorePb, TokenStorePaths } from "./tokenStore/types";
 import { sessionTokensProtoCodec } from "./tokenStore/schema";
 import type { TokenStoreContext } from "./tokenStore/context";
 import { parseTimeString as parseTimeString_operation, createStoredState as createStoredState_operation, normaliseLegacyJsonState as normaliseLegacyJsonState_operation, normaliseLegacyTokenMeta as normaliseLegacyTokenMeta_operation, normaliseStoredState as normaliseStoredState_operation, normaliseStoredTokenMeta as normaliseStoredTokenMeta_operation, hasTokens as hasTokens_operation, isRecord as isRecord_operation } from "./tokenStore/normalisation";
