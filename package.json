@@ -12,7 +12,7 @@
   "scripts": {
     "check": "bunx tsc --noEmit",
     "test": "bun test",
-    "validate": "bun run check:shape && bun run check && bun test",
+    "validate": "bun run check:shape && bun run check:structure && bun run check && bun test",
     "check:structure": "bun scripts/check-source-structure.ts",
     "check:shape": "bun scripts/checkCodeShape.ts"
   },
