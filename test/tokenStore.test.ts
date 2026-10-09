@@ -155,4 +155,46 @@ describe("session token store compatibility", () => {
         expect(internal.normaliseStoredState(null)).toEqual({ version: 1, tokens: {} });
         instance.dispose();
     });
+    test("scheduled debounce persists a new token without manually saving", async () => {
+        const root = await temp();
+        const filePath = path.join(root, "debounce.pb");
+        const tokens = new Set<string>();
+        const store = new tokenStore(fakeServer, tokens, () => {}, {
+            filePath, saveDebounceMs: 5, cleanupIntervalMs: 1_000_000
+        });
+        try {
+            store.init();
+            await store.waitUntilReady();
+            store.touchToken("automatically-saved");
+            await Bun.sleep(100);
+            const saved = sessionTokensProtoCodec.decode(await readFile(filePath));
+            expect(saved.tokens["automatically-saved"].expiresAtMs).toBe(store.getExpiryMs("automatically-saved"));
+        } finally {
+            store.dispose();
+        }
+    });
+
+    test("background cleanup expires tokens and updates the original set", async () => {
+        const root = await temp();
+        const tokens = new Set<string>();
+        const callbacks: string[][] = [];
+        const store = new tokenStore(fakeServer, tokens, changed => callbacks.push([...changed]), {
+            filePath: path.join(root, "cleanup.pb"),
+            ttlMs: 15, cleanupIntervalMs: 10, saveDebounceMs: 5
+        });
+        try {
+            store.init();
+            await store.waitUntilReady();
+            store.touchToken("short-lived");
+            expect(tokens.has("short-lived")).toBe(true);
+            await Bun.sleep(110);
+            expect(store.tokenExistsAndValid("short-lived")).toBe(false);
+            expect(tokens.has("short-lived")).toBe(false);
+            expect(store.getExpiryMs("short-lived")).toBeNull();
+            expect(callbacks.at(-1)).toEqual([]);
+        } finally {
+            store.dispose();
+        }
+    });
+
 });
