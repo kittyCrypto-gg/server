@@ -62,7 +62,8 @@ export async function hostel4PetsStyleStartup(
 /** Keep protected hooks usable by existing subclasses. */
 export class DownstreamServerSubclass extends Server {
   public inspect(): void {
-    void this.server satisfies https.Server;
+    const protectedServer: https.Server = this.server;
+    void protectedServer;
     void this.host;
     void this.port;
     void this.privateKeyPath;
