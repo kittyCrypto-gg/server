@@ -45,7 +45,7 @@ export function isGrandfathered(report: SourceReport): boolean {
 export function gitBlobHash(content: string): string {
     const buf = Buffer.from(content, "utf8");
     return createHash("sha1")
-        .update(`blob ${buf.length}\\0`)
+        .update(`blob ${buf.length}\0`)
         .update(buf)
         .digest("hex");
 }
