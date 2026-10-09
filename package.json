@@ -12,7 +12,8 @@
   "scripts": {
     "check": "bunx tsc --noEmit",
     "test": "bun test",
-    "validate": "bun run check && bun test"
+    "validate": "bun run check && bun run check:structure && bun test",
+    "check:structure": "bun scripts/check-source-structure.mts --report"
   },
   "keywords": [],
   "author": "Kitty Crow, https://kittycrow.dev",
