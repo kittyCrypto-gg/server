@@ -79,17 +79,17 @@ export async function transformRemoteUrl(ctx: TransformerContext, input: Transfo
       return ctx.passThroughGif(input, srcBytes, detectedSrcFormat);
     }
 
-    if (!input.nocache && !input.refresh) {
-      const cached = await ctx.tryLoadFromCache({
-        kind: "remote",
-        srcUrl: srcUrl.toString(),
-        outputFormat,
-        resize: resizeSpec,
-        detectedSrcFormatHint: detectedSrcFormat,
-      });
+    const cached = !input.nocache && !input.refresh
+      ? await ctx.tryLoadFromCache({
+          kind: "remote",
+          srcUrl: srcUrl.toString(),
+          outputFormat,
+          resize: resizeSpec,
+          detectedSrcFormatHint: detectedSrcFormat,
+        })
+      : null;
 
-      if (cached) return cached;
-    }
+    if (cached) return cached;
 
     ctx.assertSupportedFormat(detectedSrcFormat, "input");
     ctx.assertSupportedFormat(outputFormat, "output");
