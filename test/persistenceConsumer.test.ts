@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { parse } from 'protobufjs'
 import { MutexJsonStore, MutexFileStore } from '../src/mutexStore'
 import { MutexProtoBuffStore, type ProtoBuffCodec } from '../src/mutexPBstore'
+import { MutexProtoBuffStore as ConsumerStore, ProtoBuffObjectCodec as ConsumerCodec } from '@kittycrypto/server'
+import * as deepFileStore from '../src/mutexStore'
 import * as root from '../src/index'
 
 const temporary: string[] = []
@@ -27,6 +29,10 @@ test('direct file-store and package-root protobuf exports remain stable', () => 
     expect(typeof MutexFileStore).toBe('function')
     expect(typeof MutexJsonStore).toBe('function')
     expect(root.MutexProtoBuffStore).toBe(MutexProtoBuffStore)
+    expect(ConsumerStore).toBe(MutexProtoBuffStore)
+    expect(ConsumerCodec).toBe(root.ProtoBuffObjectCodec)
+    expect(Object.keys(deepFileStore).sort()).toEqual(['MutexFileStore', 'MutexJsonStore'])
+    expect(Object.keys(root).sort()).toEqual(['MutexProtoBuffStore', 'ProtoBuffObjectCodec', 'Server'])
     expect(typeof root.ProtoBuffObjectCodec).toBe('function')
     expect(typeof root.Server).toBe('function')
 })

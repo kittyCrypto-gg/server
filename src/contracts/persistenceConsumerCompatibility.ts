@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import { MutexJsonStore, MutexFileStore, type CorruptionPolicy } from '../mutexStore'
+import { MutexProtoBuffStore as ConsumerProtoStore, ProtoBuffObjectCodec as ConsumerObjectCodec, type ProtoBuffCodec as ConsumerCodec } from '@kittycrypto/server'
 import { MutexProtoBuffStore as DeepProtoStore, ProtoBuffObjectCodec as DeepObjectCodec, type ProtoBuffCodec as DeepCodec } from '../mutexPBstore'
 import { MutexProtoBuffStore, ProtoBuffObjectCodec, type ProtoBuffCodec, type MutexProtoBuffStoreOptions, type ProtoBuffObjectCodecOptions } from '../index'
 
@@ -8,6 +9,9 @@ type Assert<T extends true> = T
 type PreservedStore = Assert<Equal<typeof DeepProtoStore, typeof MutexProtoBuffStore>>
 type PreservedCodec = Assert<Equal<typeof DeepObjectCodec, typeof ProtoBuffObjectCodec>>
 type PreservedCodecShape = Assert<Equal<ProtoBuffCodec<{ value: number }>, DeepCodec<{ value: number }>>>
+type ConsumerPackageStore = Assert<Equal<typeof ConsumerProtoStore, typeof DeepProtoStore>>
+type ConsumerPackageCodec = Assert<Equal<typeof ConsumerObjectCodec, typeof DeepObjectCodec>>
+type ConsumerPackageCodecType = Assert<Equal<ConsumerCodec<{ value: number }>, DeepCodec<{ value: number }>>>
 type PreservedPolicy = Assert<Equal<CorruptionPolicy, 'recover' | 'throw'>>
 
 type State = { count: number }
@@ -49,4 +53,4 @@ export function existingConsumers(filePath: string, codec: ProtoBuffCodec<State>
     void ({} as ProtoBuffObjectCodecOptions)
     return { json, proto }
 }
-export type Compatibility = PreservedStore | PreservedCodec | PreservedCodecShape | PreservedPolicy
+export type Compatibility = PreservedStore | PreservedCodec | PreservedCodecShape | ConsumerPackageStore | ConsumerPackageCodec | ConsumerPackageCodecType | PreservedPolicy
