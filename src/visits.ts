@@ -1,138 +1,14 @@
-import { promises as fs } from "fs"
-import * as path from "path"
-import * as protobuf from "protobufjs"
-import type { IConversionOptions } from "protobufjs"
-import { MutexJsonStore } from "./mutexStore"
-import { MutexProtoBuffStore, ProtoBuffCodec } from "./mutexPBstore"
+import type { UnixTimestampMs, VisitEntry, VisitBucket, VisitsModel, LegacyIsoTimestamp, LegacyVisitEntry, LegacyVisitBucket, LegacyVisitsModel, VisitsModelInput, VisitsStats, PageVisitsStats, PageVisitsLogResult, VisitsLogResult, VisitsStoreOptions, VisitsStorePaths, VisitsBackingStore } from "./visits/types"
+import { visitsProtoCodec } from "./visits/schema"
+import type { VisitsContext } from "./visits/context"
+import { ensureMigrated as ensureMigrated_op, migrateLegacyJsonIfNeeded as migrateLegacyJsonIfNeeded_op, writeMigratedModel as writeMigratedModel_op, readNormalisedModel as readNormalisedModel_op, updateNormalisedModel as updateNormalisedModel_op, readModel as readModel_op, updateModel as updateModel_op, createStore as createStore_op, createLegacyStore as createLegacyStore_op, createInitialModel as createInitialModel_op, hasStoredVisits as hasStoredVisits_op } from "./visits/storage"
+import { toStats as toStats_op, getOverallVisits as getOverallVisits_op, getOverallUniqueVisitors as getOverallUniqueVisitors_op, getOverallIpVisitCount as getOverallIpVisitCount_op, getOverallLastVisitAt as getOverallLastVisitAt_op } from "./visits/statistics"
+import { applyVisit as applyVisit_op, applyVisitToBucket as applyVisitToBucket_op, createEmptyBucket as createEmptyBucket_op, appendCapped as appendCapped_op } from "./visits/visits"
+import { normaliseModel as normaliseModel_op, normaliseBucket as normaliseBucket_op, normaliseEntry as normaliseEntry_op, readPages as readPages_op, normaliseTimestamp as normaliseTimestamp_op, normaliseIp as normaliseIp_op, normalisePage as normalisePage_op, isRecord as isRecord_op } from "./visits/normalisation"
+import { resolveStorePaths as resolveStorePaths_op, replaceExtension as replaceExtension_op, fileExists as fileExists_op } from "./visits/paths"
 
-type NodeErrorWithCode = Error & { code?: string }
-
-export type UnixTimestampMs = number
-
-export type VisitEntry = {
-    count: number
-    timestamps: UnixTimestampMs[]
-}
-
-export type VisitBucket = {
-    visits: number
-    ips: Record<string, VisitEntry>
-}
-
-export type VisitsModel = {
-    pages: Record<string, VisitBucket>
-    updatedAt: UnixTimestampMs
-}
-
-export type LegacyIsoTimestamp = string
-
-export type LegacyVisitEntry = {
-    count: number
-    timestamps: LegacyIsoTimestamp[]
-}
-
-export type LegacyVisitBucket = {
-    visits: number
-    ips: Record<string, LegacyVisitEntry>
-}
-
-export type LegacyVisitsModel = LegacyVisitBucket & {
-    pages: Record<string, LegacyVisitBucket>
-    updatedAt: LegacyIsoTimestamp | UnixTimestampMs
-}
-
-export type VisitsModelInput = VisitsModel | LegacyVisitsModel
-
-export type VisitsStats = {
-    visits: number
-    uniqueVisitors: number
-    updatedAt: UnixTimestampMs
-}
-
-export type PageVisitsStats = VisitsStats & {
-    page: string
-}
-
-export type PageVisitsLogResult = PageVisitsStats & {
-    ipVisitCount: number
-    lastVisitAt: UnixTimestampMs
-}
-
-export type VisitsLogResult = VisitsStats & {
-    ip: string
-    ipVisitCount: number
-    lastVisitAt: UnixTimestampMs
-    page: PageVisitsLogResult
-}
-
-export type VisitsStoreOptions = {
-    filePath?: string
-    maxTimestampsPerIp?: number
-    lockTimeoutMs?: number
-    lockRetryDelayMs?: number
-}
-
-export type VisitsStorePaths = {
-    protoBuffFilePath: string
-    legacyJsonFilePath: string
-}
-
-export type VisitsBackingStore<TModel> = {
-    read: () => Promise<TModel>
-    update: (update: (current: TModel) => TModel | Promise<TModel>) => Promise<TModel>
-}
-
-export const visitsProtoSchema = `
-syntax = "proto3";
-
-message VisitEntry {
-    uint64 count = 1;
-    repeated int64 timestamps = 2;
-}
-
-message VisitBucket {
-    uint64 visits = 1;
-    map<string, VisitEntry> ips = 2;
-}
-
-message VisitsModel {
-    map<string, VisitBucket> pages = 1;
-    int64 updatedAt = 2;
-}
-`
-
-const visitsProtoRoot = protobuf.parse(visitsProtoSchema).root
-const visitsMessageType = visitsProtoRoot.lookupType("VisitsModel")
-
-export const visitsProtoConversionOptions: IConversionOptions = {
-    longs: Number,
-    enums: String,
-    defaults: true,
-    arrays: true,
-    objects: true
-}
-
-export const visitsProtoCodec: ProtoBuffCodec<VisitsModel> = {
-    encode: (value: VisitsModel): Buffer => {
-        const validationError = visitsMessageType.verify(value)
-
-        if (validationError !== null) {
-            throw new Error(`VisitsStore cannot encode invalid protobuf payload: ${validationError}`)
-        }
-
-        const message = visitsMessageType.fromObject(value)
-        const encoded = visitsMessageType.encode(message).finish()
-
-        return Buffer.from(encoded)
-    },
-
-    decode: (raw: Buffer): VisitsModel => {
-        const message = visitsMessageType.decode(raw)
-        const plainObject = visitsMessageType.toObject(message, visitsProtoConversionOptions)
-
-        return plainObject as VisitsModel
-    }
-}
+export type { UnixTimestampMs, VisitEntry, VisitBucket, VisitsModel, LegacyIsoTimestamp, LegacyVisitEntry, LegacyVisitBucket, LegacyVisitsModel, VisitsModelInput, VisitsStats, PageVisitsStats, PageVisitsLogResult, VisitsLogResult, VisitsStoreOptions, VisitsStorePaths, VisitsBackingStore } from "./visits/types"
+export { visitsProtoSchema, visitsProtoConversionOptions, visitsProtoCodec } from "./visits/schema"
 
 export class VisitsStore {
     protected readonly maxTimestampsPerIp: number
@@ -225,96 +101,51 @@ export class VisitsStore {
     }
 
     protected async ensureMigrated(): Promise<void> {
-        this.migrationPromise ??= this.migrateLegacyJsonIfNeeded()
-
-        await this.migrationPromise
+        return ensureMigrated_op(this as unknown as VisitsContext);
     }
 
     protected async migrateLegacyJsonIfNeeded(): Promise<void> {
-        const protoBuffExists = await this.fileExists(this.protoBuffFilePath)
-
-        if (protoBuffExists) {
-            return
-        }
-
-        const legacyJsonExists = await this.fileExists(this.legacyJsonFilePath)
-
-        if (!legacyJsonExists) {
-            return
-        }
-
-        const legacyStore = this.createLegacyStore(this.legacyJsonFilePath)
-        const legacyModel = this.normaliseModel(await legacyStore.read())
-
-        await this.writeMigratedModel(legacyModel)
+        return migrateLegacyJsonIfNeeded_op(this as unknown as VisitsContext);
     }
 
     protected async writeMigratedModel(legacyModel: VisitsModel): Promise<void> {
-        await this.updateModel((current) => {
-            const currentModel = this.normaliseModel(current)
-
-            return this.hasStoredVisits(currentModel) ? currentModel : legacyModel
-        })
+        return writeMigratedModel_op(this as unknown as VisitsContext, legacyModel);
     }
 
     protected async readNormalisedModel(): Promise<VisitsModel> {
-        return this.normaliseModel(await this.readModel())
+        return readNormalisedModel_op(this as unknown as VisitsContext);
     }
 
     protected async updateNormalisedModel(
         update: (current: VisitsModel) => VisitsModel | Promise<VisitsModel>
     ): Promise<VisitsModel> {
-        const next = await this.updateModel(async (current) => {
-            const normalisedCurrent = this.normaliseModel(current)
-
-            return await update(normalisedCurrent)
-        })
-
-        return this.normaliseModel(next)
+        return updateNormalisedModel_op(this as unknown as VisitsContext, update);
     }
 
     protected async readModel(): Promise<VisitsModelInput> {
-        return await this.store.read()
+        return readModel_op(this as unknown as VisitsContext);
     }
 
     protected async updateModel(
         update: (current: VisitsModelInput) => VisitsModel | Promise<VisitsModel>
     ): Promise<VisitsModel> {
-        return await this.store.update(async (current) => await update(current))
+        return updateModel_op(this as unknown as VisitsContext, update);
     }
 
     protected createStore(filePath: string): VisitsBackingStore<VisitsModel> {
-        return new MutexProtoBuffStore<VisitsModel>({
-            filePath,
-            lockTimeoutMs: this.lockTimeoutMs,
-            lockRetryDelayMs: this.lockRetryDelayMs,
-            initialValue: () => this.createInitialModel(),
-            codec: visitsProtoCodec
-        })
+        return createStore_op(this as unknown as VisitsContext, filePath);
     }
 
     protected createLegacyStore(filePath: string): VisitsBackingStore<VisitsModelInput> {
-        return new MutexJsonStore<VisitsModelInput>({
-            filePath,
-            lockTimeoutMs: this.lockTimeoutMs,
-            lockRetryDelayMs: this.lockRetryDelayMs,
-            initialValue: () => this.createInitialModel()
-        })
+        return createLegacyStore_op(this as unknown as VisitsContext, filePath);
     }
 
     protected createInitialModel(): VisitsModel {
-        return {
-            pages: {},
-            updatedAt: Date.now()
-        }
+        return createInitialModel_op(this as unknown as VisitsContext);
     }
 
     protected toStats(model: VisitsModel): VisitsStats {
-        return {
-            visits: this.getOverallVisits(model),
-            uniqueVisitors: this.getOverallUniqueVisitors(model),
-            updatedAt: model.updatedAt
-        }
+        return toStats_op(this as unknown as VisitsContext, model);
     }
 
     protected applyVisit(
@@ -323,16 +154,7 @@ export class VisitsStore {
         page: string,
         timestamp: UnixTimestampMs
     ): VisitsModel {
-        const currentPage = model.pages[page] ?? this.createEmptyBucket()
-        const nextPage = this.applyVisitToBucket(currentPage, ip, timestamp)
-
-        return {
-            pages: {
-                ...model.pages,
-                [page]: nextPage
-            },
-            updatedAt: timestamp
-        }
+        return applyVisit_op(this as unknown as VisitsContext, model, ip, page, timestamp);
     }
 
     protected applyVisitToBucket(
@@ -340,298 +162,78 @@ export class VisitsStore {
         ip: string,
         timestamp: UnixTimestampMs
     ): VisitBucket {
-        const existing = bucket.ips[ip]
-
-        const nextEntry: VisitEntry = existing
-            ? {
-                count: existing.count + 1,
-                timestamps: this.appendCapped(existing.timestamps, timestamp, this.maxTimestampsPerIp)
-            }
-            : {
-                count: 1,
-                timestamps: [timestamp]
-            }
-
-        return {
-            visits: bucket.visits + 1,
-            ips: {
-                ...bucket.ips,
-                [ip]: nextEntry
-            }
-        }
+        return applyVisitToBucket_op(this as unknown as VisitsContext, bucket, ip, timestamp);
     }
 
     protected normaliseModel(model: VisitsModelInput): VisitsModel {
-        const rawPages = this.readPages(model)
-        const pages: Record<string, VisitBucket> = {}
-
-        for (const [rawPage, rawBucket] of Object.entries(rawPages)) {
-            const page = this.normalisePage(rawPage)
-
-            if (!page) {
-                continue
-            }
-
-            const bucket = this.normaliseBucket(rawBucket)
-
-            if (!bucket.visits && !Object.keys(bucket.ips).length) {
-                continue
-            }
-
-            pages[page] = bucket
-        }
-
-        return {
-            pages,
-            updatedAt: this.normaliseTimestamp((model as { updatedAt?: unknown }).updatedAt) ?? Date.now()
-        }
+        return normaliseModel_op(this as unknown as VisitsContext, model);
     }
 
     protected normaliseBucket(value: unknown): VisitBucket {
-        if (!this.isRecord(value)) {
-            return this.createEmptyBucket()
-        }
-
-        const rawIps = this.isRecord(value.ips) ? value.ips : {}
-        const ips: Record<string, VisitEntry> = {}
-        let visits = 0
-
-        for (const [rawIp, rawEntry] of Object.entries(rawIps)) {
-            const ip = this.normaliseIp(rawIp)
-
-            if (!ip) {
-                continue
-            }
-
-            const entry = this.normaliseEntry(rawEntry)
-
-            if (!entry) {
-                continue
-            }
-
-            ips[ip] = entry
-            visits += entry.count
-        }
-
-        return {
-            visits,
-            ips
-        }
+        return normaliseBucket_op(this as unknown as VisitsContext, value);
     }
 
     protected normaliseEntry(value: unknown): VisitEntry | undefined {
-        if (!this.isRecord(value)) {
-            return undefined
-        }
-
-        const rawTimestamps = Array.isArray(value.timestamps) ? value.timestamps : []
-        const timestamps = rawTimestamps
-            .map((item) => this.normaliseTimestamp(item))
-            .filter((item): item is number => typeof item === "number")
-            .sort((left, right) => left - right)
-            .slice(-this.maxTimestampsPerIp)
-
-        const rawCount = value.count
-        const count = typeof rawCount === "number" && Number.isFinite(rawCount) && rawCount > 0
-            ? Math.floor(rawCount)
-            : timestamps.length
-
-        if (!count) {
-            return undefined
-        }
-
-        return {
-            count,
-            timestamps
-        }
+        return normaliseEntry_op(this as unknown as VisitsContext, value);
     }
 
     protected getOverallVisits(model: VisitsModel): number {
-        let visits = 0
-
-        for (const bucket of Object.values(model.pages)) {
-            visits += bucket.visits
-        }
-
-        return visits
+        return getOverallVisits_op(this as unknown as VisitsContext, model);
     }
 
     protected getOverallUniqueVisitors(model: VisitsModel): number {
-        const uniqueIps = new Set<string>()
-
-        for (const bucket of Object.values(model.pages)) {
-            for (const ip of Object.keys(bucket.ips)) {
-                uniqueIps.add(ip)
-            }
-        }
-
-        return uniqueIps.size
+        return getOverallUniqueVisitors_op(this as unknown as VisitsContext, model);
     }
 
     protected getOverallIpVisitCount(model: VisitsModel, ip: string): number {
-        let count = 0
-
-        for (const bucket of Object.values(model.pages)) {
-            count += bucket.ips[ip]?.count ?? 0
-        }
-
-        return count
+        return getOverallIpVisitCount_op(this as unknown as VisitsContext, model, ip);
     }
 
     protected getOverallLastVisitAt(model: VisitsModel, ip: string): UnixTimestampMs | undefined {
-        let lastVisitAt: UnixTimestampMs | undefined
-
-        for (const bucket of Object.values(model.pages)) {
-            const entry = bucket.ips[ip]
-            const candidate = entry?.timestamps[entry.timestamps.length - 1]
-
-            if (typeof candidate !== "number") {
-                continue
-            }
-
-            if (typeof lastVisitAt !== "number" || candidate > lastVisitAt) {
-                lastVisitAt = candidate
-            }
-        }
-
-        return lastVisitAt
+        return getOverallLastVisitAt_op(this as unknown as VisitsContext, model, ip);
     }
 
     protected createEmptyBucket(): VisitBucket {
-        return {
-            visits: 0,
-            ips: {}
-        }
+        return createEmptyBucket_op(this as unknown as VisitsContext);
     }
 
     protected readPages(model: VisitsModelInput): Record<string, unknown> {
-        const candidate = (model as { pages?: unknown }).pages
-
-        return this.isRecord(candidate) ? candidate : {}
+        return readPages_op(this as unknown as VisitsContext, model);
     }
 
     protected appendCapped(list: number[], value: number, max: number): number[] {
-        const next = [...list, value]
-        const overflow = next.length - max
-
-        if (overflow <= 0) {
-            return next
-        }
-
-        return next.slice(overflow)
+        return appendCapped_op(this as unknown as VisitsContext, list, value, max);
     }
 
     protected normaliseTimestamp(value: unknown): UnixTimestampMs | undefined {
-        if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-            return Math.floor(value)
-        }
-
-        if (typeof value !== "string") {
-            return undefined
-        }
-
-        const parsed = Date.parse(value)
-
-        if (!Number.isFinite(parsed)) {
-            return undefined
-        }
-
-        return parsed
+        return normaliseTimestamp_op(this as unknown as VisitsContext, value);
     }
 
     protected normaliseIp(ip: string): string {
-        const trimmed = ip.trim()
-
-        if (!trimmed) {
-            return ""
-        }
-
-        if (trimmed.startsWith("::ffff:")) {
-            return trimmed.slice("::ffff:".length)
-        }
-
-        return trimmed
+        return normaliseIp_op(this as unknown as VisitsContext, ip);
     }
 
     protected normalisePage(page: string): string {
-        const trimmed = page.trim()
-
-        if (!trimmed) {
-            return ""
-        }
-
-        const candidate = trimmed.startsWith("http://") || trimmed.startsWith("https://")
-            ? trimmed
-            : `https://placeholder${trimmed.startsWith("/") ? "" : "/"}${trimmed}`
-
-        try {
-            const url = new URL(candidate)
-            const pathname = url.pathname.replace(/\/+$/, "") || "/"
-            const normalisedPathname = pathname === "/index.html" ? "/" : pathname
-
-            return `${normalisedPathname}${url.search}`
-        } catch {
-            return ""
-        }
+        return normalisePage_op(this as unknown as VisitsContext, page);
     }
 
     protected hasStoredVisits(model: VisitsModel): boolean {
-        for (const bucket of Object.values(model.pages)) {
-            if (bucket.visits > 0 || Object.keys(bucket.ips).length > 0) {
-                return true
-            }
-        }
-
-        return false
+        return hasStoredVisits_op(this as unknown as VisitsContext, model);
     }
 
     protected resolveStorePaths(filePath: string | undefined): VisitsStorePaths {
-        const resolvedFilePath = filePath ?? path.resolve(process.cwd(), "data", "visits.pb")
-        const extension = path.extname(resolvedFilePath).toLowerCase()
-
-        if (extension === ".json") {
-            return {
-                protoBuffFilePath: this.replaceExtension(resolvedFilePath, ".pb"),
-                legacyJsonFilePath: resolvedFilePath
-            }
-        }
-
-        if (extension === ".pb") {
-            return {
-                protoBuffFilePath: resolvedFilePath,
-                legacyJsonFilePath: this.replaceExtension(resolvedFilePath, ".json")
-            }
-        }
-
-        return {
-            protoBuffFilePath: `${resolvedFilePath}.pb`,
-            legacyJsonFilePath: `${resolvedFilePath}.json`
-        }
+        return resolveStorePaths_op(this as unknown as VisitsContext, filePath);
     }
 
     protected replaceExtension(filePath: string, extension: string): string {
-        const parsed = path.parse(filePath)
-
-        return path.join(parsed.dir, `${parsed.name}${extension}`)
+        return replaceExtension_op(this as unknown as VisitsContext, filePath, extension);
     }
 
     protected async fileExists(filePath: string): Promise<boolean> {
-        try {
-            await fs.access(filePath)
-
-            return true
-        } catch (err: unknown) {
-            const code = (err as NodeErrorWithCode).code
-
-            if (code === "ENOENT") {
-                return false
-            }
-
-            throw err
-        }
+        return fileExists_op(this as unknown as VisitsContext, filePath);
     }
 
     protected isRecord(value: unknown): value is Record<string, unknown> {
-        return typeof value === "object" && value !== null && !Array.isArray(value)
+        return isRecord_op(this as unknown as VisitsContext, value);
     }
 }
