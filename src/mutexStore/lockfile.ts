@@ -212,17 +212,16 @@ export class Lockfile {
 
     private async isStale(lock: ExistingLock): Promise<boolean> {
         const metadata = lock.metadata
-        if (metadata !== null) {
-            if (metadata.host !== this.host) return false
-            const bootId = await this.bootId
-            if (metadata.bootId !== null && bootId !== null && metadata.bootId !== bootId) return true
-            if (!processIsAlive(metadata.pid)) return true
-            if (metadata.processStart !== null) {
-                const currentStart = await processStartIdentity(metadata.pid)
-                if (currentStart !== null && currentStart !== metadata.processStart) return true
-            }
-            return false
-        }
+        if (metadata !== null && metadata.host !== this.host) return false
+        const bootId = metadata !== null ? await this.bootId : null
+        if (metadata !== null && metadata.bootId !== null && bootId !== null && metadata.bootId !== bootId) return true
+        if (metadata !== null && !processIsAlive(metadata.pid)) return true
+        const currentStart = metadata?.processStart !== null && metadata !== null
+            ? await processStartIdentity(metadata.pid)
+            : null
+        if (metadata !== null && metadata.processStart !== null
+            && currentStart !== null && currentStart !== metadata.processStart) return true
+        if (metadata !== null) return false
 
         // Compatibility with locks written by the previous implementation
         // ("pid\nISO-date\n") and with its crash-window empty files. A legacy

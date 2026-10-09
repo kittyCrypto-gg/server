@@ -180,7 +180,7 @@ export abstract class MutexFileStore<T, TFileContent extends StoreFileContent> {
         if (raw === null) {
             const initial = this.initialValue()
 
-            if (persistInitial) await this.atomicWrite(initial)
+            persistInitial && await this.atomicWrite(initial)
 
             return initial
         }
