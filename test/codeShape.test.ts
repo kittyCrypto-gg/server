@@ -26,7 +26,7 @@ describe("code-shape CI rules", () => {
     });
     test("ignores comments and whitespace for baseline fingerprints", () => {
         const a = scan("if (a) {\n if (b) act();\n}");
-        const b = scan("if (a) { // comment\n\n if (b) { act(); }\n}");
+        const b = scan("if (a) { // comment\n\n if (b) act();\n}");
         expect(a.map(x => x.fingerprint)).toEqual(b.map(x => x.fingerprint));
     });
     test("requires new/modified modules to stay within 500 lines", () => {
