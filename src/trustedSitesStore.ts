@@ -1,141 +1,14 @@
-import * as crypto from "crypto"
 import * as path from "path"
-import * as protobuf from "protobufjs"
-import type { IConversionOptions } from "protobufjs"
-import { MutexProtoBuffStore, ProtoBuffCodec } from "./mutexPBstore"
+import { MutexProtoBuffStore } from "./mutexPBstore"
+import type { Uts, TrSiteRec, PendSiteChal, TrSitesOpts, MkChalArgs, MkChalRes, VrfChalArgs, VrfChalRes, TrSitesState, KeyFilePayload } from "./trustedSitesStore/types"
+import { pbCodec } from "./trustedSitesStore/schema"
+import { keyFileService } from "./trustedSitesStore/keys"
+import type { TrustedSitesContext } from "./trustedSitesStore/context"
+import { mkInitState as mkInitState_operation, normState as normState_operation, normChals as normChals_operation, normChal as normChal_operation, normSites as normSites_operation, normSite as normSite_operation, pruneChals as pruneChals_operation, normOptOrig as normOptOrig_operation, normStr as normStr_operation, normTs as normTs_operation, isRec as isRec_operation } from "./trustedSitesStore/state"
+import { parseKeyFile as parseKeyFile_operation } from "./trustedSitesStore/keys"
+import { mkChalTkn as mkChalTkn_operation, hashChalTkn as hashChalTkn_operation, sha256Txt as sha256Txt_operation } from "./trustedSitesStore/hashing"
 
-type Uts = number
-
-export type TrSiteRec = {
-    origin: string
-    verifiedAt: Uts
-    verificationPath: string
-    lastChallengeAt: Uts
-}
-
-export type PendSiteChal = {
-    origin: string
-    challengeTokenHash: string
-    keyFileSha256: string
-    createdAt: Uts
-    expiresAt: Uts
-    verificationPath: string
-    requesterKey: string
-}
-
-type TrSitesState = {
-    pendingChallenges: Record<string, PendSiteChal>
-    trustedSites: Record<string, TrSiteRec>
-    updatedAt: Uts
-}
-
-export type TrSitesOpts = {
-    filePath?: string
-    challengeTtlMs?: number
-    verificationPath?: string
-    allowHttp?: boolean
-    lockTimeoutMs?: number
-    lockRetryDelayMs?: number
-}
-
-export type MkChalArgs = {
-    origin: string
-    requesterKey?: string
-    now?: Uts
-}
-
-export type MkChalRes = {
-    origin: string
-    challengeToken: string
-    challengeTokenHash: string
-    keyFileSha256: string
-    keyFileText: string
-    verificationPath: string
-    verificationUrl: string
-    expiresAt: Uts
-}
-
-export type VrfChalArgs = {
-    origin: string
-    keyFileText: string
-    requesterKey?: string
-    now?: Uts
-}
-
-export type VrfChalRes = {
-    verified: boolean
-    origin: string
-    trustedSite?: TrSiteRec
-    reason?: string
-}
-
-type KeyFilePayload = {
-    service: string
-    origin: string
-    challengeToken: string
-}
-
-const keyFileService = "kittycrow-visits"
-
-const pbSchema = `
-syntax = "proto3";
-
-message PendingTrustedSiteChallenge {
-    string origin = 1;
-    string challengeTokenHash = 2;
-    int64 createdAt = 3;
-    int64 expiresAt = 4;
-    string verificationPath = 5;
-    string requesterKey = 6;
-    string keyFileSha256 = 7;
-}
-
-message TrustedSiteRecord {
-    string origin = 1;
-    int64 verifiedAt = 2;
-    string verificationPath = 3;
-    int64 lastChallengeAt = 4;
-}
-
-message TrustedSitesState {
-    map<string, PendingTrustedSiteChallenge> pendingChallenges = 1;
-    map<string, TrustedSiteRecord> trustedSites = 2;
-    int64 updatedAt = 3;
-}
-`
-
-const pbRoot = protobuf.parse(pbSchema).root
-const pbType = pbRoot.lookupType("TrustedSitesState")
-
-const pbConv: IConversionOptions = {
-    longs: Number,
-    enums: String,
-    defaults: true,
-    arrays: true,
-    objects: true
-}
-
-const pbCodec: ProtoBuffCodec<TrSitesState> = {
-    encode: (val: TrSitesState): Buffer => {
-        const err = pbType.verify(val)
-
-        if (err !== null) {
-            throw new Error(`TrSitesStore cannot encode invalid protobuf payload: ${err}`)
-        }
-
-        const msg = pbType.fromObject(val)
-        const enc = pbType.encode(msg).finish()
-
-        return Buffer.from(enc)
-    },
-
-    decode: (raw: Buffer): TrSitesState => {
-        const msg = pbType.decode(raw)
-        const obj = pbType.toObject(msg, pbConv)
-
-        return obj as TrSitesState
-    }
-}
+export type { TrSiteRec, PendSiteChal, TrSitesOpts, MkChalArgs, MkChalRes, VrfChalArgs, VrfChalRes } from "./trustedSitesStore/types"
 
 export class TrSitesStore {
     private readonly store: MutexProtoBuffStore<TrSitesState>
@@ -436,207 +309,62 @@ export class TrSitesStore {
     }
 
     private mkInitState(): TrSitesState {
-        return {
-            pendingChallenges: {},
-            trustedSites: {},
-            updatedAt: Date.now()
-        }
+        return mkInitState_operation(this as unknown as TrustedSitesContext);
     }
 
     private normState(val: unknown): TrSitesState {
-        if (!this.isRec(val)) {
-            return this.mkInitState()
-        }
-
-        return {
-            pendingChallenges: this.normChals(val.pendingChallenges),
-            trustedSites: this.normSites(val.trustedSites),
-            updatedAt: this.normTs(val.updatedAt) ?? Date.now()
-        }
+        return normState_operation(this as unknown as TrustedSitesContext, val);
     }
 
     private normChals(val: unknown): Record<string, PendSiteChal> {
-        if (!this.isRec(val)) {
-            return {}
-        }
-
-        const out: Record<string, PendSiteChal> = {}
-
-        for (const [orig, raw] of Object.entries(val)) {
-            const chal = this.normChal(raw)
-
-            if (!chal) {
-                continue
-            }
-
-            out[orig] = chal
-        }
-
-        return out
+        return normChals_operation(this as unknown as TrustedSitesContext, val);
     }
 
     private normChal(val: unknown): PendSiteChal | undefined {
-        if (!this.isRec(val)) {
-            return undefined
-        }
-
-        const orig = this.normOptOrig(val.origin)
-        const chalHash = this.normStr(val.challengeTokenHash)
-        const keyFileHash = this.normStr(val.keyFileSha256)
-        const madeAt = this.normTs(val.createdAt)
-        const expAt = this.normTs(val.expiresAt)
-        const vrfPath = this.normStr(val.verificationPath)
-        const reqKey = this.normStr(val.requesterKey)
-
-        if (!orig || !chalHash || !keyFileHash || !madeAt || !expAt || !vrfPath) {
-            return undefined
-        }
-
-        return {
-            origin: orig,
-            challengeTokenHash: chalHash,
-            keyFileSha256: keyFileHash,
-            createdAt: madeAt,
-            expiresAt: expAt,
-            verificationPath: vrfPath,
-            requesterKey: reqKey
-        }
+        return normChal_operation(this as unknown as TrustedSitesContext, val);
     }
 
     private normSites(val: unknown): Record<string, TrSiteRec> {
-        if (!this.isRec(val)) {
-            return {}
-        }
-
-        const out: Record<string, TrSiteRec> = {}
-
-        for (const [orig, raw] of Object.entries(val)) {
-            const site = this.normSite(raw)
-
-            if (!site) {
-                continue
-            }
-
-            out[orig] = site
-        }
-
-        return out
+        return normSites_operation(this as unknown as TrustedSitesContext, val);
     }
 
     private normSite(val: unknown): TrSiteRec | undefined {
-        if (!this.isRec(val)) {
-            return undefined
-        }
-
-        const orig = this.normOptOrig(val.origin)
-        const vrfAt = this.normTs(val.verifiedAt)
-        const vrfPath = this.normStr(val.verificationPath)
-        const lastChalAt = this.normTs(val.lastChallengeAt)
-
-        if (!orig || !vrfAt || !vrfPath || !lastChalAt) {
-            return undefined
-        }
-
-        return {
-            origin: orig,
-            verifiedAt: vrfAt,
-            verificationPath: vrfPath,
-            lastChallengeAt: lastChalAt
-        }
+        return normSite_operation(this as unknown as TrustedSitesContext, val);
     }
 
     private pruneChals(st: TrSitesState, now: Uts): TrSitesState {
-        const pendingChallenges: Record<string, PendSiteChal> = {}
-
-        for (const [orig, chal] of Object.entries(st.pendingChallenges)) {
-            if (chal.expiresAt > now) {
-                pendingChallenges[orig] = chal
-            }
-        }
-
-        return {
-            pendingChallenges,
-            trustedSites: st.trustedSites,
-            updatedAt: st.updatedAt
-        }
+        return pruneChals_operation(this as unknown as TrustedSitesContext, st, now);
     }
 
     private mkChalTkn(): string {
-        return crypto.randomBytes(32).toString("base64url")
+        return mkChalTkn_operation(this as unknown as TrustedSitesContext);
     }
 
     private hashChalTkn(chalTkn: string): string {
-        return this.sha256Txt(chalTkn)
+        return hashChalTkn_operation(this as unknown as TrustedSitesContext, chalTkn);
     }
 
     private parseKeyFile(keyFileTxt: string): KeyFilePayload {
-        let raw: unknown
-
-        try {
-            raw = JSON.parse(keyFileTxt)
-        } catch {
-            throw new Error("Key file is not valid JSON.")
-        }
-
-        if (!this.isRec(raw)) {
-            throw new Error("Key file must contain a JSON object.")
-        }
-
-        const service = this.normStr(raw.service)
-        const origin = this.normOptOrig(raw.origin)
-        const challengeToken = this.normStr(raw.challengeToken)
-
-        if (service !== keyFileService) {
-            throw new Error("Key file service is invalid.")
-        }
-
-        if (!origin) {
-            throw new Error("Key file origin is invalid.")
-        }
-
-        if (!challengeToken) {
-            throw new Error("Key file challenge token is missing.")
-        }
-
-        return {
-            service,
-            origin,
-            challengeToken
-        }
+        return parseKeyFile_operation(this as unknown as TrustedSitesContext, keyFileTxt);
     }
 
     private sha256Txt(val: string): string {
-        return crypto
-            .createHash("sha256")
-            .update(val, "utf8")
-            .digest("hex")
+        return sha256Txt_operation(this as unknown as TrustedSitesContext, val);
     }
 
     private normOptOrig(val: unknown): string | undefined {
-        if (typeof val !== "string") {
-            return undefined
-        }
-
-        try {
-            return this.normOrig(val)
-        } catch {
-            return undefined
-        }
+        return normOptOrig_operation(this as unknown as TrustedSitesContext, val);
     }
 
     private normStr(val: unknown): string {
-        return typeof val === "string" ? val.trim() : ""
+        return normStr_operation(this as unknown as TrustedSitesContext, val);
     }
 
     private normTs(val: unknown): Uts | undefined {
-        if (typeof val !== "number" || !Number.isFinite(val) || val <= 0) {
-            return undefined
-        }
-
-        return Math.floor(val)
+        return normTs_operation(this as unknown as TrustedSitesContext, val);
     }
 
     private isRec(val: unknown): val is Record<string, unknown> {
-        return typeof val === "object" && val !== null && !Array.isArray(val)
+        return isRec_operation(this as unknown as TrustedSitesContext, val);
     }
 }
