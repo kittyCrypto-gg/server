@@ -67,18 +67,16 @@ export async function getCommits(
         const commitReadmeMajor = versioning.parseVer(c.version).major;
 
         const setver = versioning.parseSetverDirective(c.message);
+        if (setver?.kind === "explicit") {
+          current = versioning.parseVer(setver.rawVersion);
+          c.version = setver.rawVersion; // store exactly what was typed
+          outCommits.push(c);
+          continue;
+        }
         if (setver) {
-          if (setver.kind === "explicit") {
-            current = versioning.parseVer(setver.rawVersion);
-            c.version = setver.rawVersion; // store exactly what was typed
-            outCommits.push(c);
-            continue;
-          }
-
-          if (commitReadmeMajor > 0) {
-            current = versioning.setverToReadmeMajor(commitReadmeMajor);
-          }
-
+          current = commitReadmeMajor > 0
+            ? versioning.setverToReadmeMajor(commitReadmeMajor)
+            : current;
           c.version = versioning.formatVer(current);
           outCommits.push(c);
           continue;

@@ -100,7 +100,8 @@ export async function rebuildAll(
           console.log(
             `[GithubTracker][${ctx.owner}/${repo}] First commit: idx=${idx}/${items.length} (${pct}%) sha=${sha}`
           );
-        } else if ((i % progressEvery) === 0) {
+        }
+        if (i !== 0 && (i % progressEvery) === 0) {
           console.log(
             `[GithubTracker][${ctx.owner}/${repo}] Progress: idx=${idx}/${items.length} (${pct}%) currentVersion=${versioning.formatVer(current)}`
           );
@@ -134,52 +135,50 @@ export async function rebuildAll(
 
         let storedVersionOverride: string | null = null;
 
-        if (setver) {
-          if (setver.kind === "explicit") {
-            console.log(
-              `[GithubTracker][${ctx.owner}/${repo}]   - Found !setver explicit override: ${setver.rawVersion} (was ${before})`
-            );
-            current = versioning.parseVer(setver.rawVersion);
-            storedVersionOverride = setver.rawVersion;
-          } else {
-            if (commitMajor > 0) {
-              const nextFromReadme = versioning.setverToReadmeMajor(commitMajor);
-              console.log(
-                `[GithubTracker][${ctx.owner}/${repo}]   - Found !setver (README major): ${before} -> ${versioning.formatVer(nextFromReadme)}`
-              );
-              current = nextFromReadme;
-            } else {
-              console.log(
-                `[GithubTracker][${ctx.owner}/${repo}]   - Found !setver but README major not detected, leaving version unchanged (current=${before})`
-              );
-            }
-          }
-        } else {
-          const taggedTier = versioning.tierFromMsg(message);
+        if (setver?.kind === "explicit") {
+          console.log(
+            `[GithubTracker][${ctx.owner}/${repo}]   - Found !setver explicit override: ${setver.rawVersion} (was ${before})`
+          );
+          current = versioning.parseVer(setver.rawVersion);
+          storedVersionOverride = setver.rawVersion;
+        }
 
-          if (taggedTier) {
-            console.log(
-              `[GithubTracker][${ctx.owner}/${repo}]   - Tier decided from tag: ${taggedTier}`
-            );
-          } else {
-            console.log(
-              `[GithubTracker][${ctx.owner}/${repo}]   - No tier tag found. Asking LLM to classify...`
-            );
-          }
+        if (setver?.kind === "readmeMajor" && commitMajor > 0) {
+          const nextFromReadme = versioning.setverToReadmeMajor(commitMajor);
+          console.log(
+            `[GithubTracker][${ctx.owner}/${repo}]   - Found !setver (README major): ${before} -> ${versioning.formatVer(nextFromReadme)}`
+          );
+          current = nextFromReadme;
+        }
 
-          const tier = taggedTier ?? await ctx.genTier(message, diff);
+        if (setver?.kind === "readmeMajor" && commitMajor <= 0) {
+          console.log(
+            `[GithubTracker][${ctx.owner}/${repo}]   - Found !setver but README major not detected, leaving version unchanged (current=${before})`
+          );
+        }
 
-          if (!taggedTier) {
-            console.log(
-              `[GithubTracker][${ctx.owner}/${repo}]   - LLM tier: ${tier}`
-            );
-          }
+        const taggedTier = !setver ? versioning.tierFromMsg(message) : null;
+        if (!setver && taggedTier) {
+          console.log(
+            `[GithubTracker][${ctx.owner}/${repo}]   - Tier decided from tag: ${taggedTier}`
+          );
+        }
+        if (!setver && !taggedTier) {
+          console.log(
+            `[GithubTracker][${ctx.owner}/${repo}]   - No tier tag found. Asking LLM to classify...`
+          );
+        }
 
+        const tier = !setver ? (taggedTier ?? await ctx.genTier(message, diff)) : null;
+        if (!setver && !taggedTier) {
+          console.log(
+            `[GithubTracker][${ctx.owner}/${repo}]   - LLM tier: ${tier}`
+          );
+        }
+        if (!setver && tier !== null) {
           const next = versioning.bumpVer(current, tier);
-
           current = next;
           const after = versioning.formatVer(current);
-
           console.log(
             `[GithubTracker][${ctx.owner}/${repo}]   - Version bump: ${before} -> ${after} (tier=${tier})`
           );

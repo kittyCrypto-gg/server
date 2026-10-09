@@ -94,18 +94,12 @@ export async function fetchCommItms(
 
       if (!pageItems.length) return all;
 
-      if (!stopSha) {
-        all.push(...pageItems);
-      } else {
-        const stopIdx = pageItems.findIndex((c) => c.sha === stopSha);
-
-        if (stopIdx >= 0) {
-          all.push(...pageItems.slice(0, stopIdx + 1));
-          return all;
-        }
-
-        all.push(...pageItems);
+      const stopIdx = stopSha ? pageItems.findIndex((c) => c.sha === stopSha) : -1;
+      if (stopIdx >= 0) {
+        all.push(...pageItems.slice(0, stopIdx + 1));
+        return all;
       }
+      all.push(...pageItems);
 
       const links = ctx.parseLink(resp.headers.get('link'));
       const hasNext = typeof links.next === 'string' && links.next.length > 0;
