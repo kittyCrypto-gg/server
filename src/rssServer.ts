@@ -160,9 +160,8 @@ class RssServer extends Server {
                 const nameAttr = element.getAttribute("name") || element.getAttribute("property");
                 const contentAttr = element.getAttribute("content");
 
-                if (nameAttr === tag.replace(/meta\[name='|meta\[property='|\']/g, "") && contentAttr) {
-                    if (!isNaN(Date.parse(contentAttr))) return contentAttr;
-                }
+                if (nameAttr === tag.replace(/meta\[name='|meta\[property='|\']/g, "")
+                    && contentAttr && !isNaN(Date.parse(contentAttr))) return contentAttr;
             }
         }
 

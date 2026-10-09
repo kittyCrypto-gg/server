@@ -5,8 +5,8 @@ import path from "node:path";
 import ts from "typescript";
 
 /**
- * Immutable pre-refactor baseline. The baseline is read with git show;
- * no generated allow-list that silently admits new violations.
+ * Immutable pre-refactor baseline is used ONLY for the 500-line module limit.
+ * Nested conditional statements have no exemptions, even in unchanged files.
  */
 export const BASELINE = "4e38ddaa64146124c575bd5e3aee28732b399054";
 export const MAX_LINES = 500;
@@ -96,15 +96,6 @@ const allFiles = (directory: string): string[] => {
     return found.sort();
 };
 
-const countFingerprints = (findings: Finding[]): Map<string, number> => {
-    const counts = new Map<string, number>();
-    for (const finding of findings) {
-        const id = finding.rule + ":" + finding.fingerprint;
-        counts.set(id, (counts.get(id) ?? 0) + 1);
-    }
-    return counts;
-};
-
 function main(): void {
     let baselinePaths: string[];
     try {
@@ -116,18 +107,12 @@ function main(): void {
     }
 
     const baselineSources = new Map<string, string>();
-    const baselineFindings: Finding[] = [];
     for (const file of baselinePaths) {
-        const content = git("show", BASELINE + ":" + file);
-        baselineSources.set(file, content);
-        baselineFindings.push(...scanConditionals(file, content));
+        baselineSources.set(file, git("show", BASELINE + ":" + file));
     }
 
-    const allowed = countFingerprints(baselineFindings);
-    const observed = new Map<string, number>();
     const errors: string[] = [];
     let totalNested = 0;
-    let permittedLegacy = 0;
     let legacyOversized = 0;
 
     for (const file of allFiles("src")) {
@@ -141,22 +126,13 @@ function main(): void {
 
         const findings = scanConditionals(file, current);
         totalNested += findings.length;
-        for (const f of findings) {
-            const key = f.rule + ":" + f.fingerprint;
-            const seen = (observed.get(key) ?? 0) + 1;
-            observed.set(key, seen);
-            if (seen > (allowed.get(key) ?? 0)) {
-                errors.push(f.file + ":" + f.line + ": new " + f.rule +
-                    " (not in the immutable pre-refactor baseline)");
-            } else {
-                permittedLegacy++;
-            }
+        for (const finding of findings) {
+            errors.push(finding.file + ":" + finding.line + ": forbidden " + finding.rule);
         }
     }
 
     console.log("[shape] baseline: " + BASELINE.slice(0, 12));
-    console.log("[shape] nested control statements: " + totalNested +
-        " (legacy " + permittedLegacy + ", new " + (totalNested - permittedLegacy) + ")");
+    console.log("[shape] nested control statements: " + totalNested + " (required: 0; no exemptions)");
     console.log("[shape] untouched oversized legacy source files: " + legacyOversized);
     console.log("[shape] changed/new source module limit: " + MAX_LINES + " lines");
     if (errors.length > 0) {
@@ -164,7 +140,7 @@ function main(): void {
         process.exitCode = 1;
         return;
     }
-    console.log("[shape] PASS: no new nested control flow or oversized modified modules");
+    console.log("[shape] PASS: zero nested control statements repository-wide");
 }
 
 if (import.meta.main) main();

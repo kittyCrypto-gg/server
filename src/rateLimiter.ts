@@ -199,12 +199,12 @@ class rateLimiter {
 
                 if (!decision.allowed) {
                     res.setHeader("Retry-After", String(decision.retryAfterSeconds));
-
-                    if (options.onRejected) {
-                        options.onRejected(req, res, decision);
-                        return;
-                    }
-
+                }
+                if (!decision.allowed && options.onRejected) {
+                    options.onRejected(req, res, decision);
+                    return;
+                }
+                if (!decision.allowed) {
                     res.status(429).json({
                         ok: false,
                         error: `Too many requests. Retry in ${String(decision.retryAfterSeconds)} seconds.`

@@ -56,30 +56,27 @@ class KittyRequest<T extends object> {
 
         const store = this.TokenStore;
 
-        if (requireSessionToken) {
-            if (!store) {
-                return res.status(500).json({ error: "Token store not configured." });
-            }
+        if (requireSessionToken && !store) {
+            return res.status(500).json({ error: "Token store not configured." });
+        }
 
+        if (requireSessionToken) {
             try {
                 await store.waitUntilReady();
             } catch {
                 return res.status(503).json({ error: "Server initialising. Try again." });
             }
+        }
 
-            const token = getSessionToken(req);
-
-            if (!token) {
-                return res.status(422).json({ error: "Missing sessionToken." });
-            }
-
-            if (!store.tokenExistsAndValid(token)) {
-                return res.status(403).json({ error: "Session expired." });
-            }
-
-            if (touchOnValid) {
-                store.touchToken(token);
-            }
+        const token = requireSessionToken ? getSessionToken(req) : null;
+        if (requireSessionToken && !token) {
+            return res.status(422).json({ error: "Missing sessionToken." });
+        }
+        if (requireSessionToken && token && !store.tokenExistsAndValid(token)) {
+            return res.status(403).json({ error: "Session expired." });
+        }
+        if (requireSessionToken && token && touchOnValid) {
+            store.touchToken(token);
         }
 
         try {
@@ -104,14 +101,11 @@ class KittyRequest<T extends object> {
                 return res;
             }
 
-            if (error instanceof Error) {
-                if (error.message.includes("Invalid request format")) {
-                    return res.status(400).json({ error: error.message });
-                }
-
-                if (error.message.includes("Missing")) {
-                    return res.status(422).json({ error: error.message });
-                }
+            if (error instanceof Error && error.message.includes("Invalid request format")) {
+                return res.status(400).json({ error: error.message });
+            }
+            if (error instanceof Error && error.message.includes("Missing")) {
+                return res.status(422).json({ error: error.message });
             }
 
             return res.status(500).json({ error: "Internal server error." });

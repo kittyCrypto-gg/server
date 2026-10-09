@@ -406,11 +406,12 @@ export async function refreshAppDiscovery(): Promise<AppDiscoverySnapshot> {
             console.error("❌ Local app discovery failed:", localResult.reason);
         }
 
-        if (githubResult.status === "rejected" && localResult.status === "rejected") {
-            if (previous.generatedAt !== null) {
-                return previous;
-            }
+        const bothDiscoverySourcesFailed =
+            githubResult.status === "rejected" && localResult.status === "rejected";
 
+        if (bothDiscoverySourcesFailed && previous.generatedAt !== null) return previous;
+
+        if (bothDiscoverySourcesFailed) {
             throw new AggregateError(
                 [githubResult.reason, localResult.reason],
                 "Both GitHub and local app discovery failed."

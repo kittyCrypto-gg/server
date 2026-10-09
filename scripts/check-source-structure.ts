@@ -37,19 +37,21 @@ for (const file of files) {
     const nested = report.conditionals.length > 0;
     if (!tooLong && !nested) continue;
 
-    const original = legacy[path];
-    if (original && gitBlobHash(source) === original) {
+    const grandfatheredLength = tooLong && legacy[path] === gitBlobHash(source);
+    if (grandfatheredLength) {
         ++legacyFiles;
-        console.warn(`[structure] BASELINE ${path}: ${report.lines} lines; ${report.conditionals.length} nested conditionals (exact unchanged main blob)`);
-        continue;
+        console.warn(`[structure] BASELINE SIZE ONLY ${path}: ${report.lines} lines`);
     }
 
-    ++failed;
-    if (tooLong) {
+    if (tooLong && !grandfatheredLength) {
+        ++failed;
         console.error(`[structure] FAIL ${path}: ${report.lines} lines exceeds ${maxLines}`);
     }
-    for (const issue of report.conditionals) {
-        console.error(`[structure] FAIL ${path}:${issue.line} nested ${issue.kind}`);
+    if (nested) {
+        ++failed;
+        for (const issue of report.conditionals) {
+            console.error(`[structure] FAIL ${path}:${issue.line} nested ${issue.kind}`);
+        }
     }
 }
 console.log(`[structure] scanned ${files.length} source modules; ${legacyFiles} unchanged legacy exceptions; ${failed} failing files`);
