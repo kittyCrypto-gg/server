@@ -216,7 +216,7 @@ export class Lockfile {
         const bootId = metadata !== null ? await this.bootId : null
         if (metadata !== null && metadata.bootId !== null && bootId !== null && metadata.bootId !== bootId) return true
         if (metadata !== null && !processIsAlive(metadata.pid)) return true
-        const currentStart = metadata?.processStart !== null && metadata !== null
+        const currentStart = metadata !== null && metadata.processStart !== null
             ? await processStartIdentity(metadata.pid)
             : null
         if (metadata !== null && metadata.processStart !== null
