@@ -92,3 +92,41 @@ test('separate protobuf instances keep cross-instance updates serialised', async
     ))
     expect(await a.read()).toEqual({ count: 12 })
 })
+
+
+test('FelineBot-style object codec preserves message options, bytes and persisted updates', async () => {
+    type Archive = Record<string, unknown> & {
+        owner: string
+        seedStage: number
+        candles: string[]
+    }
+    const folder = await dir()
+    const file = join(folder, 'feline.pb')
+    const messageType = parse('syntax = "proto3"; message Archive { string owner = 1; uint32 seedStage = 2; repeated string candles = 3; }').root.lookupType('Archive')
+    const objectCodec = new ConsumerCodec<Archive>({
+        messageType,
+        conversionOptions: { defaults: true, arrays: true }
+    })
+    const initial: Archive = { owner: '', seedStage: 0, candles: [] }
+    const state = new ConsumerStore<Archive>({
+        filePath: file,
+        initialValue: () => initial,
+        codec: objectCodec,
+        onCorrupt: ({ backupPath }) => { void backupPath }
+    })
+    expect(await state.read()).toEqual(initial)
+    const changed = await state.update(current => ({
+        ...current, owner: 'worker-a', seedStage: 2, candles: [...current.candles, 'one', 'two']
+    }))
+    expect(changed).toEqual({ owner: 'worker-a', seedStage: 2, candles: ['one', 'two'] })
+    const raw = await readFile(file)
+    const wire = messageType.decode(raw)
+    expect(messageType.toObject(wire, { defaults: true, arrays: true })).toEqual(changed)
+    const reopened = new ConsumerStore<Archive>({
+        filePath: file, initialValue: () => initial, codec: objectCodec
+    })
+    expect(await reopened.read()).toEqual(changed)
+    expect((await stat(file)).mode & 0o777).toBe(0o600)
+    expect(() => objectCodec.encode({ ...changed, seedStage: 'invalid' } as unknown as Archive))
+        .toThrow('cannot encode invalid protobuf payload')
+})
