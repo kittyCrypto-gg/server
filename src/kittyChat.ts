@@ -1,5 +1,3 @@
-import crypto from "crypto";
-import fs from "fs";
 import { Request, Response } from "express";
 import { OpenAI } from "openai";
 import Server from "./baseServer";
@@ -8,34 +6,15 @@ import { tokenStore } from "./tokenStore";
 import path from "path";
 /* @ts-ignore */
 import "dotenv/config";
+import type { ChatMessage, ChatRequest, ModeratorStrings } from "./kittyChat/types";
+import { encryptValue, decryptValue, encryptChatMessage, decryptChatMessage, generateMsgId, generateUserId } from "./kittyChat/crypto";
+import { loadModeratorStrings } from "./kittyChat/moderatorStrings";
+import { moderateMessage } from "./kittyChat/moderation";
 
-const CHAT_KEY_RAW = process.env.CHAT_KEY || "";
-const CHAT_KEY_BUFFER = Buffer.from(CHAT_KEY_RAW, "base64");
-const CHAT_KEY = CHAT_KEY_BUFFER.subarray(0, 32);
 
 const apiKey = process.env.OPENAI_KEY || "";
 const openai = new OpenAI({ apiKey });
 
-interface ChatRequest {
-    nick: string;
-    msg: string;
-    ip: string;
-    sessionToken: string;
-}
-
-interface ChatMessage {
-    nick: string;
-    id: string;
-    msg: string;
-    timestamp: string;
-    msgId: string;
-    edited?: boolean;
-}
-
-interface ModeratorStrings {
-    role?: string;
-    user?: string;
-}
 
 class Chat extends KittyRequest<ChatMessage> {
     protected readonly stringsFilePath: string;
@@ -71,19 +50,7 @@ class Chat extends KittyRequest<ChatMessage> {
     }
 
     private loadModeratorStrings(): { [key: string]: ModeratorStrings } {
-        try {
-            const raw = fs.readFileSync(this.stringsFilePath, "utf-8");
-            const parsed = JSON.parse(raw) as unknown;
-
-            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-                return {};
-            }
-
-            return parsed as { [key: string]: ModeratorStrings };
-        } catch (error) {
-            console.error("❌ Failed to load moderator strings:", error);
-            return {};
-        }
+        return loadModeratorStrings(this.stringsFilePath);
     }
 
     private async editMessage(req: Request, res: Response): Promise<object> {
@@ -213,25 +180,7 @@ class Chat extends KittyRequest<ChatMessage> {
     }
 
     private async moderateMessage(userMessage: string): Promise<string> {
-        try {
-            const response = await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [
-                    {
-                        role: "system",
-                        content:
-                            this.strings.moderator?.role ||
-                            "You are a moderator. Please moderate the following message:",
-                    },
-                    { role: "user", content: `The user has requested to store the following:\n\n${userMessage}` },
-                ],
-            });
-
-            return response.choices[0].message.content ?? "Error moderating the message.";
-        } catch (error) {
-            console.error("❌ ERROR: AI moderation failed:", error);
-            return "ERROR";
-        }
+        return await moderateMessage(userMessage, this.strings, openai);
     }
 
     protected async storeMessage(req: Request, res: Response): Promise<object> {
@@ -260,100 +209,27 @@ class Chat extends KittyRequest<ChatMessage> {
     }
 
     private generateMsgId(id: string, timestamp: string, sessionToken: string): string {
-        const unixTimestamp = Math.floor(new Date(timestamp).getTime() / 1000);
-        const salt = crypto.randomBytes(8).toString("hex");
-        const hash = crypto
-            .createHash("sha256")
-            .update(`${id}${unixTimestamp}${sessionToken}${salt}`)
-            .digest("hex");
-        const numericHash = BigInt(`0x${hash.substring(0, 16)}`);
-        const session = BigInt(`0x${sessionToken}`);
-        return (numericHash * session).toString();
+        return generateMsgId(id, timestamp, sessionToken);
     }
 
     public generateUserId(ip: string): string {
-        const hash = crypto.createHash("sha256").update(ip).digest("hex").substring(0, 10);
-        return `0x${hash}`;
+        return generateUserId(ip);
     }
 
     private encryptValue(value: string): string {
-        if (!CHAT_KEY) {
-            throw new Error("CHAT_KEY is missing. Ensure it is properly set.");
-        }
-
-        if (CHAT_KEY.length !== 32) {
-            throw new Error(`CHAT_KEY must be exactly 32 bytes, but got ${CHAT_KEY.length} bytes.`);
-        }
-
-        const iv = crypto.randomBytes(12);
-        const cipher = crypto.createCipheriv("aes-256-gcm", CHAT_KEY, iv);
-
-        const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-        const tag = cipher.getAuthTag();
-
-        return `v2:${iv.toString("hex")}:${tag.toString("hex")}:${encrypted.toString("hex")}`;
+        return encryptValue(value);
     }
 
     private decryptValue(encryptedValue: string): string {
-        try {
-            if (!CHAT_KEY) {
-                throw new Error("CHAT_KEY is missing. Ensure it is properly set.");
-            }
-
-            if (CHAT_KEY.length !== 32) {
-                throw new Error(`CHAT_KEY must be exactly 32 bytes, but got ${CHAT_KEY.length} bytes.`);
-            }
-
-            const parts = encryptedValue.split(":");
-
-            if (parts.length === 4 && parts[0] === "v2") {
-                const iv = Buffer.from(parts[1], "hex");
-                const tag = Buffer.from(parts[2], "hex");
-                const encryptedText = Buffer.from(parts[3], "hex");
-
-                const decipher = crypto.createDecipheriv("aes-256-gcm", CHAT_KEY, iv);
-                decipher.setAuthTag(tag);
-
-                const decrypted = Buffer.concat([decipher.update(encryptedText), decipher.final()]);
-                return decrypted.toString("utf8");
-            }
-
-            if (parts.length === 2) {
-                const iv = Buffer.from(parts[0], "hex");
-                const encryptedText = Buffer.from(parts[1], "hex");
-
-                const decipher = crypto.createDecipheriv("aes-256-cbc", CHAT_KEY, iv);
-                const decrypted = Buffer.concat([decipher.update(encryptedText), decipher.final()]);
-                return decrypted.toString("utf8");
-            }
-
-            throw new Error("Unknown encrypted format");
-        } catch (error) {
-            console.error("❌ ERROR: Decryption failed!", error);
-            return "ERROR";
-        }
+        return decryptValue(encryptedValue);
     }
 
     private encryptChatMessage(message: ChatMessage): ChatMessage {
-        return {
-            nick: this.encryptValue(message.nick),
-            id: this.encryptValue(message.id),
-            msg: this.encryptValue(message.msg),
-            msgId: message.msgId,
-            timestamp: message.timestamp,
-            ...(message.edited ? { edited: true } : {}),
-        };
+        return encryptChatMessage(message);
     }
 
     private decryptChatMessage(message: ChatMessage): ChatMessage {
-        return {
-            nick: this.decryptValue(message.nick),
-            id: this.decryptValue(message.id),
-            msg: this.decryptValue(message.msg),
-            msgId: message.msgId,
-            timestamp: message.timestamp,
-            ...(message.edited ? { edited: true } : {}),
-        };
+        return decryptChatMessage(message);
     }
 
     public processChatMessages(messages: ChatMessage[], encrypt: boolean): ChatMessage[] {
