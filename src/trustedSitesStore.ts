@@ -2,7 +2,9 @@ import * as path from "path"
 import { MutexProtoBuffStore } from "./mutexPBstore"
 import type { Uts, TrSiteRec, PendSiteChal, TrSitesOpts, MkChalArgs, MkChalRes, VrfChalArgs, VrfChalRes, TrSitesState, KeyFilePayload } from "./trustedSitesStore/types"
 import { pbCodec } from "./trustedSitesStore/schema"
-import { keyFileService } from "./trustedSitesStore/keys"
+import { mkChal as mkChal_operation, vrfChal as vrfChal_operation } from "./trustedSitesStore/challenges";
+import { isTrst as isTrst_operation, getSite as getSite_operation, listSites as listSites_operation, listChals as listChals_operation, revSite as revSite_operation, delChal as delChal_operation } from "./trustedSitesStore/sites";
+import { normOrig as normOrig_operation, mkVrfUrl as mkVrfUrl_operation, mkKeyFile as mkKeyFile_operation, hashKeyFile as hashKeyFile_operation } from "./trustedSitesStore/origins";
 import type { TrustedSitesContext } from "./trustedSitesStore/context"
 import { mkInitState as mkInitState_operation, normState as normState_operation, normChals as normChals_operation, normChal as normChal_operation, normSites as normSites_operation, normSite as normSite_operation, pruneChals as pruneChals_operation, normOptOrig as normOptOrig_operation, normStr as normStr_operation, normTs as normTs_operation, isRec as isRec_operation } from "./trustedSitesStore/state"
 import { parseKeyFile as parseKeyFile_operation } from "./trustedSitesStore/keys"
@@ -30,282 +32,53 @@ export class TrSitesStore {
         })
     }
 
+
     public async mkChal(args: MkChalArgs): Promise<MkChalRes> {
-        const orig = this.normOrig(args.origin)
-        const now = args.now ?? Date.now()
-        const chalTkn = this.mkChalTkn()
-        const chalHash = this.hashChalTkn(chalTkn)
-        const keyFileTxt = this.mkKeyFile(orig, chalTkn)
-        const keyFileHash = this.hashKeyFile(keyFileTxt)
-        const exp = now + this.ttlMs
-        const reqKey = args.requesterKey?.trim() ?? ""
-
-        await this.store.update((cur) => {
-            const st = this.pruneChals(this.normState(cur), now)
-
-            st.pendingChallenges[orig] = {
-                origin: orig,
-                challengeTokenHash: chalHash,
-                keyFileSha256: keyFileHash,
-                createdAt: now,
-                expiresAt: exp,
-                verificationPath: this.vrfPath,
-                requesterKey: reqKey
-            }
-
-            st.updatedAt = now
-
-            return st
-        })
-
-        return {
-            origin: orig,
-            challengeToken: chalTkn,
-            challengeTokenHash: chalHash,
-            keyFileSha256: keyFileHash,
-            keyFileText: keyFileTxt,
-            verificationPath: this.vrfPath,
-            verificationUrl: this.mkVrfUrl(orig),
-            expiresAt: exp
-        }
+        return mkChal_operation(this as unknown as TrustedSitesContext, args);
     }
 
     public async vrfChal(args: VrfChalArgs): Promise<VrfChalRes> {
-        const orig = this.normOrig(args.origin)
-        const keyFileTxt = args.keyFileText
-        const reqKey = args.requesterKey?.trim() ?? ""
-        const now = args.now ?? Date.now()
-
-        if (!keyFileTxt.trim()) {
-            return {
-                verified: false,
-                origin: orig,
-                reason: "Key file content is required."
-            }
-        }
-
-        let keyPayload: KeyFilePayload
-
-        try {
-            keyPayload = this.parseKeyFile(keyFileTxt)
-        } catch (err: unknown) {
-            return {
-                verified: false,
-                origin: orig,
-                reason: err instanceof Error ? err.message : "Key file is invalid."
-            }
-        }
-
-        let res: VrfChalRes = {
-            verified: false,
-            origin: orig,
-            reason: "Challenge was not found."
-        }
-
-        await this.store.update((cur) => {
-            const st = this.pruneChals(this.normState(cur), now)
-            const chal = st.pendingChallenges[orig]
-
-            if (!chal) {
-                res = {
-                    verified: false,
-                    origin: orig,
-                    reason: "Challenge was not found or has expired."
-                }
-
-                return st
-            }
-
-            if (chal.requesterKey && chal.requesterKey !== reqKey) {
-                res = {
-                    verified: false,
-                    origin: orig,
-                    reason: "Challenge requester does not match."
-                }
-
-                return st
-            }
-
-            const keyFileHash = this.hashKeyFile(keyFileTxt)
-
-            if (keyFileHash !== chal.keyFileSha256) {
-                res = {
-                    verified: false,
-                    origin: orig,
-                    reason: "Key file checksum does not match."
-                }
-
-                return st
-            }
-
-            if (keyPayload.origin !== orig) {
-                res = {
-                    verified: false,
-                    origin: orig,
-                    reason: "Key file origin does not match."
-                }
-
-                return st
-            }
-
-            const candHash = this.hashChalTkn(keyPayload.challengeToken)
-
-            if (candHash !== chal.challengeTokenHash) {
-                res = {
-                    verified: false,
-                    origin: orig,
-                    reason: "Challenge token does not match."
-                }
-
-                return st
-            }
-
-            const site: TrSiteRec = {
-                origin: orig,
-                verifiedAt: now,
-                verificationPath: chal.verificationPath,
-                lastChallengeAt: chal.createdAt
-            }
-
-            st.trustedSites[orig] = site
-            delete st.pendingChallenges[orig]
-            st.updatedAt = now
-
-            res = {
-                verified: true,
-                origin: orig,
-                trustedSite: site
-            }
-
-            return st
-        })
-
-        return res
+        return vrfChal_operation(this as unknown as TrustedSitesContext, args);
     }
 
     public async isTrst(origin: string): Promise<boolean> {
-        const orig = this.normOrig(origin)
-        const st = this.normState(await this.store.read())
-
-        return typeof st.trustedSites[orig] !== "undefined"
+        return isTrst_operation(this as unknown as TrustedSitesContext, origin);
     }
 
     public async getSite(origin: string): Promise<TrSiteRec | undefined> {
-        const orig = this.normOrig(origin)
-        const st = this.normState(await this.store.read())
-
-        return st.trustedSites[orig]
+        return getSite_operation(this as unknown as TrustedSitesContext, origin);
     }
 
     public async listSites(): Promise<TrSiteRec[]> {
-        const st = this.normState(await this.store.read())
-
-        return Object.values(st.trustedSites).sort((left, right) =>
-            left.origin.localeCompare(right.origin)
-        )
+        return listSites_operation(this as unknown as TrustedSitesContext);
     }
 
     public async listChals(now: Uts = Date.now()): Promise<PendSiteChal[]> {
-        const st = await this.store.update((cur) => {
-            const next = this.pruneChals(this.normState(cur), now)
-
-            next.updatedAt = now
-
-            return next
-        })
-
-        return Object.values(st.pendingChallenges).sort((left, right) =>
-            left.origin.localeCompare(right.origin)
-        )
+        return listChals_operation(this as unknown as TrustedSitesContext, now);
     }
 
     public async revSite(origin: string): Promise<boolean> {
-        const orig = this.normOrig(origin)
-        let gone = false
-
-        await this.store.update((cur) => {
-            const st = this.normState(cur)
-
-            gone = typeof st.trustedSites[orig] !== "undefined"
-
-            delete st.trustedSites[orig]
-            st.updatedAt = Date.now()
-
-            return st
-        })
-
-        return gone
+        return revSite_operation(this as unknown as TrustedSitesContext, origin);
     }
 
     public async delChal(origin: string): Promise<boolean> {
-        const orig = this.normOrig(origin)
-        let gone = false
-
-        await this.store.update((cur) => {
-            const st = this.normState(cur)
-
-            gone = typeof st.pendingChallenges[orig] !== "undefined"
-
-            delete st.pendingChallenges[orig]
-            st.updatedAt = Date.now()
-
-            return st
-        })
-
-        return gone
+        return delChal_operation(this as unknown as TrustedSitesContext, origin);
     }
 
     public normOrig(val: string): string {
-        const txt = val.trim()
-
-        if (!txt) {
-            throw new Error("Site origin is required.")
-        }
-
-        const url = new URL(txt)
-
-        if (url.username || url.password) {
-            throw new Error("Site origin must not include credentials.")
-        }
-
-        if (url.pathname !== "/" || url.search || url.hash) {
-            throw new Error("Site origin must not include a path, query, or hash.")
-        }
-
-        if (url.protocol === "https:") {
-            return url.origin
-        }
-
-        if (this.allowHttp && url.protocol === "http:") {
-            return url.origin
-        }
-
-        throw new Error("Site origin must use HTTPS.")
+        return normOrig_operation(this as unknown as TrustedSitesContext, val);
     }
 
     public mkVrfUrl(origin: string): string {
-        const orig = this.normOrig(origin)
-
-        return `${orig}${this.vrfPath}`
+        return mkVrfUrl_operation(this as unknown as TrustedSitesContext, origin);
     }
 
     public mkKeyFile(origin: string, chalTkn: string): string {
-        const orig = this.normOrig(origin)
-        const token = chalTkn.trim()
-
-        if (!token) {
-            throw new Error("Challenge token is required.")
-        }
-
-        return `${JSON.stringify({
-            service: keyFileService,
-            origin: orig,
-            challengeToken: token
-        }, null, 4)}\n`
+        return mkKeyFile_operation(this as unknown as TrustedSitesContext, origin, chalTkn);
     }
 
     public hashKeyFile(keyFileTxt: string): string {
-        return this.sha256Txt(keyFileTxt)
+        return hashKeyFile_operation(this as unknown as TrustedSitesContext, keyFileTxt);
     }
 
     private mkInitState(): TrSitesState {
@@ -368,3 +141,4 @@ export class TrSitesStore {
         return isRec_operation(this as unknown as TrustedSitesContext, val);
     }
 }
+
