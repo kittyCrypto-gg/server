@@ -4,38 +4,17 @@ import { tokenStore } from "./tokenStore";
 import Server from "./baseServer";
 import { OpenAI } from "openai";
 import path from "path";
-import fs from "fs";
 /* @ts-ignore */
 import "dotenv/config";
+import type { RssCommentData, ModeratorStrings } from "./rssComments/types";
+import { isValidURL, isValidRssComment, safeDecode } from "./rssComments/validation";
+import { loadModeratorStrings } from "./rssComments/stringLoader";
+import { moderateComment } from "./rssComments/moderation";
+
+export type { RssCommentData } from "./rssComments/types";
 
 const apiKey = process.env.OPENAI_KEY || "";
 const openai = new OpenAI({ apiKey });
-
-interface ModeratorStrings {
-    role?: string;
-    user?: string;
-}
-
-export interface RssCommentData {
-    slug: string;
-    nick: string;
-    msg: string;
-    ip: string;
-    sessionToken: string;
-    timestamp: string;
-    id: string;
-    website?: string;
-    location?: string;
-}
-
-function isValidURL(value: string): boolean {
-    try {
-        new URL(value);
-        return true;
-    } catch {
-        return false;
-    }
-}
 
 class RssComment extends KittyRequest<RssCommentData> {
     private strings: { [key: string]: ModeratorStrings } = {};
@@ -71,51 +50,15 @@ class RssComment extends KittyRequest<RssCommentData> {
     }
 
     private loadModeratorStrings(): { [key: string]: ModeratorStrings } {
-        try {
-            const raw = fs.readFileSync(this.stringsFilePath, "utf-8");
-            const parsed = JSON.parse(raw) as unknown;
-
-            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-                return {};
-            }
-
-            return parsed as { [key: string]: ModeratorStrings };
-        } catch {
-            throw new Error("Could not load moderator strings.");
-        }
+        return loadModeratorStrings(this.stringsFilePath);
     }
 
     private safeDecode(value: string): string {
-        try {
-            return decodeURIComponent(value);
-        } catch {
-            return value;
-        }
+        return safeDecode(value);
     }
 
     private async moderateComment(rawMsg: string): Promise<string> {
-        try {
-            const response = await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [
-                    {
-                        role: "system",
-                        content:
-                            this.strings.moderator?.role ||
-                            "You are a moderator. Please moderate the following message:"
-                    },
-                    {
-                        role: "user",
-                        content: `The user submitted the following RSS post comment:\n\n${rawMsg}`
-                    }
-                ]
-            });
-
-            return response.choices[0].message.content ?? "Error moderating comment.";
-        } catch (error) {
-            console.error("❌ RSS comment AI moderation failed:", error);
-            return "ERROR";
-        }
+        return await moderateComment(rawMsg, this.strings, openai);
     }
 
     private async loadComments(req: Request, res: Response): Promise<void> {
@@ -181,23 +124,7 @@ class RssComment extends KittyRequest<RssCommentData> {
     }
 
     static isValidRssComment(data: unknown): data is RssCommentData {
-        if (typeof data !== "object" || data === null) {
-            return false;
-        }
-
-        const comment = data as RssCommentData;
-
-        return (
-            typeof comment.slug === "string" &&
-            typeof comment.nick === "string" &&
-            typeof comment.msg === "string" &&
-            typeof comment.ip === "string" &&
-            typeof comment.sessionToken === "string" &&
-            typeof comment.timestamp === "string" &&
-            typeof comment.id === "string" &&
-            (comment.website === undefined || typeof comment.website === "string") &&
-            (comment.location === undefined || typeof comment.location === "string")
-        );
+        return isValidRssComment(data);
     }
 }
 
