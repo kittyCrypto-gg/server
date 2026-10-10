@@ -24,25 +24,25 @@ export function generateUserId(ip: string): string {
 
 export function encryptValue(value: string, key: Buffer = CHAT_KEY): string {
     if (!key) {
-        throw new Error("key is missing. Ensure it is properly set.");
+        throw new Error("CHAT_KEY is missing. Ensure it is properly set.");
     }
-     if (key.length !== 32) {
-        throw new Error(`key must be exactly 32 bytes, but got ${key.length} bytes.`);
+    if (key.length !== 32) {
+        throw new Error(`CHAT_KEY must be exactly 32 bytes, but got ${key.length} bytes.`);
     }
-     const iv = crypto.randomBytes(12);
+    const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-     const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+    const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
     const tag = cipher.getAuthTag();
-     return `v2:${iv.toString("hex")}:${tag.toString("hex")}:${encrypted.toString("hex")}`;
+    return `v2:${iv.toString("hex")}:${tag.toString("hex")}:${encrypted.toString("hex")}`;
 }
 
 export function decryptValue(encryptedValue: string, key: Buffer = CHAT_KEY): string {
     try {
         if (!key) {
-            throw new Error("key is missing. Ensure it is properly set.");
+            throw new Error("CHAT_KEY is missing. Ensure it is properly set.");
         }
          if (key.length !== 32) {
-            throw new Error(`key must be exactly 32 bytes, but got ${key.length} bytes.`);
+            throw new Error(`CHAT_KEY must be exactly 32 bytes, but got ${key.length} bytes.`);
         }
          const parts = encryptedValue.split(":");
          if (parts.length === 4 && parts[0] === "v2") {
