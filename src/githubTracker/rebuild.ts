@@ -1,7 +1,7 @@
 import * as versioning from "./versioning";
 import { replayRebuildCommit } from "./rebuild/replay";
 import { createRebuildFlusher } from "./rebuild/storage";
-import type { BumpTier, DecimalPrecision, DecimalVersion, RepoIdentifier, CommitSummary, RepoHistory, SetverDirective, GitHubCommit, LlmTierJson } from "./types";
+import type { DecimalVersion, RepoIdentifier, CommitSummary, RepoHistory } from "./types";
 import type { TrackerContext } from "./context";
 
 export async function rebuildAll(

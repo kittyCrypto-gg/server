@@ -41,5 +41,5 @@ export function createRebuildFlusher(
           `[GithubTracker][${ctx.owner}/${repo}] Flush: wrote ${pending.length} commit(s) to ${fileName}`
         );
 
-      };
+    };
 }
