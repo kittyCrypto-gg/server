@@ -1,5 +1,5 @@
 import { promises as fs } from "fs"
-import type { NodeErrorWithCode, ExistingLock } from "./types"
+import type { NodeErrorWithCode, OwnedLockMetadata, ExistingLock } from "./types"
 import { ownedMetadata } from "./metadata"
 import { processStartIdentity, processIsAlive } from "./processIdentity"
 
@@ -16,7 +16,6 @@ export function sameLock(a: ExistingLock, b: ExistingLock): boolean {
     if (aToken !== undefined || bToken !== undefined) return aToken !== undefined && aToken === bToken
     return a.raw === b.raw
 }
-
 
 export async function isStaleLock(ctx: StalenessContext, lock: ExistingLock): Promise<boolean> {
     const metadata = lock.metadata
@@ -41,7 +40,6 @@ export async function isStaleLock(ctx: StalenessContext, lock: ExistingLock): Pr
     if (lock.legacyPid !== null && !processIsAlive(lock.legacyPid)) return true
     return false
 }
-
 
 export async function readExistingLock(filePath: string, fileMode: number): Promise<ExistingLock | null> {
     try {
