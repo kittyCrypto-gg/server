@@ -1,52 +1,10 @@
-import { readdir, readFile } from 'fs/promises';
-import fetch from 'node-fetch';
 import path from 'path';
-
 /* @ts-ignore */
 import 'dotenv/config';
-
-type RepoIdentifier = string;
-
-type CommitSummary = {
-    sha: string;
-    author: string;
-    date: string;
-    message: string;
-    url: string;
-    diff: string;
-    version: string;
-};
-
-type RepoHistory = {
-    repo: RepoIdentifier;
-    createdAt: string;
-    commits: CommitSummary[];
-};
-
-type PublishResult =
-    | { kind: 'skipped'; repo: RepoIdentifier; reason: string }
-    | { kind: 'updated'; repo: RepoIdentifier; from: string; to: string; commitSha: string; readmeSha: string };
-
-type GitHubContentResponse = {
-    sha: string;
-    content: string; // base64
-    encoding: 'base64';
-};
-
-type GitHubUpdateResponse = {
-    content?: { sha?: string };
-    commit?: { sha?: string };
-};
-
-type ReadmePublisherOptions = {
-    outDirName?: string;
-
-    branch?: string;
-
-    dryRun?: boolean;
-
-    commitMessage?: string;
-};
+import type { RepoIdentifier, RepoHistory, PublishResult, ReadmePublisherOptions } from './readmeUpdater/types';
+import { historyFilePattern, getLatestHistoryFile, latestHistoryVersion } from './readmeUpdater/history';
+import { fetchGithubReadme, updateGithubReadme } from './readmeUpdater/github';
+import { replaceVersionToken } from './readmeUpdater/token';
 
 export class versionTracker {
     private owner: string;
@@ -94,121 +52,30 @@ export class versionTracker {
     }
 
     private getHisFilePatt(repo: string): RegExp {
-        return new RegExp(`-GithubTracker-${this.owner}-${repo}\\.json$`);
+        return historyFilePattern(this.owner, repo);
     }
-
     private async getLatestFile(repo: string): Promise<{ file: string; data: RepoHistory } | null> {
-        let files: string[] = [];
-        try {
-            files = await readdir(this.dataDir);
-        } catch {
-            return null;
-        }
-
-        const pattern = this.getHisFilePatt(repo);
-        const matches = files.filter((f) => pattern.test(f));
-        if (!matches.length) return null;
-
-        matches.sort();
-        const latest = matches[matches.length - 1];
-        const jsonPath = path.join(this.dataDir, latest);
-
-        let json = '';
-        try {
-            json = await readFile(jsonPath, 'utf-8');
-        } catch {
-            return null;
-        }
-
-        try {
-            const parsed = JSON.parse(json) as RepoHistory;
-            return { file: latest, data: parsed };
-        } catch {
-            return null;
-        }
+        return await getLatestHistoryFile(this.dataDir, this.getHisFilePatt(repo));
     }
-
     private latestVer(history: RepoHistory): string | null {
-        if (!history.commits.length) return null;
-        const last = history.commits[history.commits.length - 1];
-        const v = (last.version ?? '').trim();
-        return v ? v : null;
+        return latestHistoryVersion(history);
     }
-
     private async fetchReadme(repo: string): Promise<{ sha: string; content: string } | null> {
-        const url =
-            `https://api.github.com/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(repo)}/contents/README.md` +
-            `?ref=${encodeURIComponent(this.branch)}`;
-
-        const resp = await fetch(url, { headers: this.getHeaders() });
-        if (!resp.ok) return null;
-
-        const raw = (await resp.json()) as unknown;
-        if (typeof raw !== 'object' || raw === null) return null;
-
-        const obj = raw as Partial<GitHubContentResponse>;
-        if (typeof obj.sha !== 'string') return null;
-        if (typeof obj.content !== 'string') return null;
-        if (obj.encoding !== 'base64') return null;
-
-        const decoded = Buffer.from(obj.content, 'base64').toString('utf-8');
-        return { sha: obj.sha, content: decoded };
+        return await fetchGithubReadme(this.owner, repo, this.branch, () => this.getHeaders());
     }
-
-    private replaceToken(
-        original: string,
-        version: string
-    ): { updated: string; changed: boolean; fromToken: string | null; toToken: string } {
-        // Find first occurrence like ${V12} and replace ALL occurrences to ${V<version>}
-        const tokenRe = /\$\{V(\d+(?:\.\d+)?)\}/g;
-
-        let firstFrom: string | null = null;
-        const updated = original.replace(tokenRe, (m) => {
-            if (!firstFrom) firstFrom = m;
-            return `\${V${version}}`;
-        });
-
-        const changed = updated !== original;
-        return { updated, changed, fromToken: firstFrom, toToken: `\${V${version}}` };
+    private replaceToken(original: string, version: string): {
+        updated: string; changed: boolean; fromToken: string | null; toToken: string
+    } {
+        return replaceVersionToken(original, version);
     }
-
-    private async updateReadme(
-        repo: string,
-        readmeSha: string,
-        newContent: string
-    ): Promise<{ commitSha: string; newReadmeSha: string } | null> {
-        if (this.dryRun) {
-            return { commitSha: '(dry-run)', newReadmeSha: readmeSha };
-        }
-
-        const url = `https://api.github.com/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(repo)}/contents/README.md`;
-
-        const body = {
-            message: this.commitMessage,
-            content: Buffer.from(newContent, 'utf-8').toString('base64'),
-            sha: readmeSha,
-            branch: this.branch
-        };
-
-        const resp = await fetch(url, {
-            method: 'PUT',
-            headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-
-        if (!resp.ok) return null;
-
-        const raw = (await resp.json()) as unknown;
-        if (typeof raw !== 'object' || raw === null) return null;
-
-        const obj = raw as GitHubUpdateResponse;
-        const commitSha = obj.commit?.sha ?? '';
-        const newReadmeSha = obj.content?.sha ?? '';
-
-        if (!commitSha || !newReadmeSha) return null;
-        return { commitSha, newReadmeSha };
+    private async updateReadme(repo: string, readmeSha: string, newContent: string): Promise<{
+        commitSha: string; newReadmeSha: string
+    } | null> {
+        return await updateGithubReadme(
+            this.owner, repo, this.branch, this.dryRun, this.commitMessage,
+            () => this.getHeaders(), readmeSha, newContent
+        );
     }
-
     public async publish(): Promise<PublishResult[]> {
         const results: PublishResult[] = [];
 
