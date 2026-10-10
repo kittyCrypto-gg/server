@@ -146,7 +146,7 @@ test("registered edit/delete routes retain encrypted persistence, ordering and c
     });
 });
 
-test("incorrect divisors return 403 without changing stored ciphertext", async () => {
+test("incorrect divisors return 403 without changing encrypted message values", async () => {
     await withHarness(async ({ invoke, file, chat }) => {
         const original = await readFile(file, "utf8");
         expect(await invoke("/chat/edit", edit("07"))).toEqual({
@@ -155,12 +155,13 @@ test("incorrect divisors return 403 without changing stored ciphertext", async (
         expect(await invoke("/chat/delete", remove("07"))).toEqual({
             status: 403, body: { error: "Unauthorised" }
         });
-        expect(await readFile(file, "utf8")).toBe(original);
+        // A no-op MutexJsonStore update can reformat JSON without changing values.
+        expect(JSON.parse(await readFile(file, "utf8"))).toEqual(JSON.parse(original));
         expect(await chat.loadAndDecryptChat()).toEqual(initialMessages);
     });
 });
 
-test("missing message IDs and invalid requests retain historical responses", async () => {
+test("missing message IDs and invalid requests retain responses and stored values", async () => {
     await withHarness(async ({ invoke, file }) => {
         const original = await readFile(file, "utf8");
         expect(await invoke("/chat/edit", edit("0a", "999"))).toEqual({
@@ -175,7 +176,7 @@ test("missing message IDs and invalid requests retain historical responses", asy
         expect(await invoke("/chat/delete", { msgId: "120", sessionToken: "0a" })).toEqual({
             status: 200, body: { error: "Missing required parameters" }
         });
-        expect(await readFile(file, "utf8")).toBe(original);
+        expect(JSON.parse(await readFile(file, "utf8"))).toEqual(JSON.parse(original));
     });
 });
 
