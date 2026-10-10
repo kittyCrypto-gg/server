@@ -1,86 +1,9 @@
 import { promises as fs } from 'fs'
-import type { Stats } from 'fs'
 import * as crypto from 'crypto'
 import { hostname, uptime } from 'os'
-
-type NodeErrorWithCode = Error & { code?: string }
-
-type OwnedLockMetadata = {
-    version: 1
-    pid: number
-    host: string
-    bootId: string | null
-    processStart: string | null
-    createdAt: number
-    token: string
-}
-
-type ExistingLock = {
-    metadata: OwnedLockMetadata | null
-    legacyPid: number | null
-    legacyCreatedAt: number | null
-    raw: string
-    stat: Stats
-}
-
-const processStartIdentity = async (pid: number): Promise<string | null> => {
-    try {
-        const raw = await fs.readFile(`/proc/${pid}/stat`, { encoding: 'utf8' })
-        const close = raw.lastIndexOf(')')
-        if (close < 0) return null
-        const fields = raw.slice(close + 1).trim().split(/\s+/u)
-        const start = fields[19]
-        return start === undefined || start.length === 0 ? null : start
-    } catch (err: unknown) {
-        const code = (err as NodeErrorWithCode).code
-        if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') return null
-        throw err
-    }
-}
-
-const linuxBootId = async (): Promise<string | null> => {
-    try {
-        const value = (await fs.readFile('/proc/sys/kernel/random/boot_id', { encoding: 'utf8' })).trim()
-        return value.length === 0 ? null : value
-    } catch (err: unknown) {
-        const code = (err as NodeErrorWithCode).code
-        if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') return null
-        throw err
-    }
-}
-
-const processIsAlive = (pid: number): boolean => {
-    try {
-        process.kill(pid, 0)
-        return true
-    } catch (err: unknown) {
-        const code = (err as NodeErrorWithCode).code
-        if (code === 'ESRCH') return false
-        if (code === 'EPERM') return true
-        return true
-    }
-}
-
-const ownedMetadata = (value: unknown): OwnedLockMetadata | null => {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-    const record = value as Record<string, unknown>
-    if (record['version'] !== 1) return null
-    if (!Number.isSafeInteger(record['pid']) || (record['pid'] as number) <= 0) return null
-    if (typeof record['host'] !== 'string' || record['host'].length === 0) return null
-    if (record['bootId'] !== null && typeof record['bootId'] !== 'string') return null
-    if (record['processStart'] !== null && typeof record['processStart'] !== 'string') return null
-    if (typeof record['createdAt'] !== 'number' || !Number.isFinite(record['createdAt']) || record['createdAt'] <= 0) return null
-    if (typeof record['token'] !== 'string' || record['token'].length === 0) return null
-    return {
-        version: 1,
-        pid: record['pid'] as number,
-        host: record['host'],
-        bootId: record['bootId'] as string | null,
-        processStart: record['processStart'] as string | null,
-        createdAt: record['createdAt'],
-        token: record['token'],
-    }
-}
+import type { NodeErrorWithCode, OwnedLockMetadata, ExistingLock } from './lockfile/types'
+import { processStartIdentity, linuxBootId } from './lockfile/processIdentity'
+import { sameLock, isStaleLock, readExistingLock } from './lockfile/inspection'
 
 export class Lockfile {
     private readonly lockPath: string
@@ -203,65 +126,19 @@ export class Lockfile {
     }
 
     private sameLock(a: ExistingLock, b: ExistingLock): boolean {
-        if (a.stat.dev !== b.stat.dev || a.stat.ino !== b.stat.ino) return false
-        const aToken = a.metadata?.token
-        const bToken = b.metadata?.token
-        if (aToken !== undefined || bToken !== undefined) return aToken !== undefined && aToken === bToken
-        return a.raw === b.raw
+        return sameLock(a, b)
     }
 
     private async isStale(lock: ExistingLock): Promise<boolean> {
-        const metadata = lock.metadata
-        if (metadata !== null && metadata.host !== this.host) return false
-        const bootId = metadata !== null ? await this.bootId : null
-        if (metadata !== null && metadata.bootId !== null && bootId !== null && metadata.bootId !== bootId) return true
-        if (metadata !== null && !processIsAlive(metadata.pid)) return true
-        const currentStart = metadata !== null && metadata.processStart !== null
-            ? await processStartIdentity(metadata.pid)
-            : null
-        if (metadata !== null && metadata.processStart !== null
-            && currentStart !== null && currentStart !== metadata.processStart) return true
-        if (metadata !== null) return false
-
-        // Compatibility with locks written by the previous implementation
-        // ("pid\nISO-date\n") and with its crash-window empty files. A legacy
-        // lock from before this boot is unambiguously stale. Within the current
-        // boot we reclaim it only when its recorded PID is demonstrably dead.
-        const beforeCurrentBoot = lock.stat.mtimeMs < this.bootStartedAt - 1000
-            || (lock.legacyCreatedAt !== null && lock.legacyCreatedAt < this.bootStartedAt - 1000)
-        if (beforeCurrentBoot) return true
-        if (lock.legacyPid !== null && !processIsAlive(lock.legacyPid)) return true
-        return false
+        return await isStaleLock({
+            host: this.host,
+            bootId: this.bootId,
+            bootStartedAt: this.bootStartedAt,
+        }, lock)
     }
 
     private async readExisting(filePath: string): Promise<ExistingLock | null> {
-        try {
-            const [raw, stat] = await Promise.all([
-                fs.readFile(filePath, { encoding: 'utf8' }),
-                fs.stat(filePath),
-            ])
-            await fs.chmod(filePath, this.fileMode)
-            let metadata: OwnedLockMetadata | null = null
-            try {
-                metadata = ownedMetadata(JSON.parse(raw))
-            } catch {
-                metadata = null
-            }
-            const lines = raw.split(/\r?\n/u)
-            const legacyPidRaw = Number(lines[0])
-            const legacyCreatedRaw = Date.parse(lines[1] ?? '')
-            return {
-                metadata,
-                legacyPid: Number.isSafeInteger(legacyPidRaw) && legacyPidRaw > 0 ? legacyPidRaw : null,
-                legacyCreatedAt: Number.isFinite(legacyCreatedRaw) ? legacyCreatedRaw : null,
-                raw,
-                stat,
-            }
-        } catch (err: unknown) {
-            const code = (err as NodeErrorWithCode).code
-            if (code === 'ENOENT') return null
-            throw err
-        }
+        return await readExistingLock(filePath, this.fileMode)
     }
 
     private async release(owner: OwnedLockMetadata): Promise<void> {
