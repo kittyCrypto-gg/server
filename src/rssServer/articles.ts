@@ -5,7 +5,9 @@ import axios from "axios";
 import type { aiParser } from "../aiParser";
 import type { MetaDoc, ScrapedArticle } from "./types";
 
-export async function fetchReadableContent(url: string, extractMetaDate: (dom: MetaDoc) => string | null, extractDateFromText: (text: string) => string | null, parser: aiParser) {
+type ScrapedMaybe = Awaited<ReturnType<typeof fetchReadableContent>>;
+
+export async function fetchReadableContent(url: string, extractMetaDate: (dom: MetaDoc) => string | null, extractDateFromText: (text: string) => string | null, aiDateParser: aiParser) {
     try {
         const { data } = await axios.get(url, { headers: { "User-Agent": "Mozilla/5.0" } });
 
@@ -22,7 +24,7 @@ export async function fetchReadableContent(url: string, extractMetaDate: (dom: M
             article.publishedTime
             || extractMetaDate(dom)
             || extractDateFromText(article.textContent ?? "")
-            || (article.textContent ? await parser.extractDate(article.textContent) : null)
+            || (article.textContent ? await aiDateParser.extractDate(article.textContent) : null)
             || new Date().toISOString();
 
         return {
@@ -41,7 +43,7 @@ export async function fetchReadableContent(url: string, extractMetaDate: (dom: M
 export async function fetchArticlesFromSource(
     source: string,
     existingArticles: Set<string>,
-    fetchReadableContent: (url: string) => Promise<ScrapedArticle | null>
+    fetchReadableContent: (url: string) => Promise<ScrapedMaybe>
 ): Promise<ScrapedArticle[]> {
     try {
         const { data } = await axios.get(source, { headers: { "User-Agent": "Mozilla/5.0" } });

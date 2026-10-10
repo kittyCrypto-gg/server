@@ -46,7 +46,7 @@ class RssServer extends Server {
         return await fetchAndCacheRSS(source, cacheFile);
     }
 
-    private async fetchReadableContent(url: string): Promise<ScrapedArticle | null> {
+    private async fetchReadableContent(url: string) {
         return await fetchReadableContent(url, dom => this.extractMetaDate(dom), text => this.extractDateFromText(text), this.aiParser);
     }
 
