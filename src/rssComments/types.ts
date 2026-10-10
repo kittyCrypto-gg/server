@@ -1,7 +1,4 @@
-export interface ModeratorStrings {
-    role?: string;
-    user?: string;
-}
+export type { ModeratorStrings } from "../comments/shared";
 
 export interface RssCommentData {
     slug: string;

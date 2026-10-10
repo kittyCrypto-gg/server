@@ -1,13 +1,6 @@
 import type { RssCommentData } from "./types";
 
-export function isValidURL(value: string): boolean {
-    try {
-        new URL(value);
-        return true;
-    } catch {
-        return false;
-    }
-}
+export { isValidURL } from "../comments/shared";
 
 export function isValidRssComment(data: unknown): data is RssCommentData {
     if (typeof data !== "object" || data === null) {
