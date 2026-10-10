@@ -1,22 +1,16 @@
-import { autoBlogger, ModeratorStrings } from "./autoBlogger";
-import { versionTracker } from "./readmeUpdater";
-import { GirhubTracker } from "./githubTracker";
+import { type ModeratorStrings } from "./autoBlogger";
 import { readFileSync } from "fs";
 import { OpenAI } from "openai";
 import path from "path";
 /* @ts-ignore */
 import "dotenv/config";
+import type { GithubAutoSchedulerOptions } from "./blogScheduler/types";
+import { msUntilNextSunday } from "./blogScheduler/timing";
+import { runRepositoryCycle } from "./blogScheduler/runner";
+import { trackAndBlog, publishReadmes, type SchedulerContext } from "./blogScheduler/workflows";
 
 const apiKey = process.env.OPENAI_KEY || "";
 const openai = new OpenAI({ apiKey });
-
-type GithubAutoSchedulerOptions = {
-  owner: string;
-  repos: string[];
-  blogUser?: string;
-  branch?: string;
-  sinceDays?: number;
-};
 
 export class GithubAutoScheduler {
   private owner: string;
@@ -41,63 +35,26 @@ export class GithubAutoScheduler {
   }
 
   private msUntilNextSunday(): number {
-    const now = new Date();
-    const day = now.getDay(); // 0 = Sunday
-    const hour = now.getHours();
-    const minute = now.getMinutes();
-    const second = now.getSeconds();
-    let daysUntil = (7 - day) % 7;
-    if (daysUntil === 0 && (hour > 0 || minute > 0 || second > 0)) daysUntil = 7;
-    const next = new Date(now);
-    next.setDate(now.getDate() + daysUntil);
-    next.setHours(0, 0, 0, 0);
-    return next.getTime() - now.getTime();
+    return msUntilNextSunday();
   }
 
-  private async runFullTrackingForAllRepos() {
-    for (const repo of this.repos) {
-      try {
-        const tracker = new GirhubTracker(this.owner, [repo]);
-        console.log(`[githubTracker] Fetching commits for ${repo} since last ${this.sinceDays} days...`);
-        await tracker.getCommits(this.branch, this.sinceDays);
-        // console.log(`[githubTracker] Rebuilding history for ${repo}...`);
-        // await tracker.rebuildAll(this.branch);
+  private workflowContext(): SchedulerContext {
+    return {
+      owner: this.owner,
+      repos: this.repos,
+      blogUser: this.blogUser,
+      branch: this.branch,
+      sinceDays: this.sinceDays,
+      openai: this.openai,
+      strings: this.strings
+    };
+  }
 
-        const blogger = new autoBlogger(this.owner, repo, this.openai, this.strings);
-
-        const posts = await blogger.summariseLatest(this.blogUser, true);
-
-        // const posts = await blogger.summariseAll(this.blogUser, false);
-
-        for (const p of posts) {
-          console.log(`[autoBlogger] Wrote: ${p}`);
-        }
-
-        console.log(`✅ Auto-tracked and blogged for ${repo} at ${new Date().toISOString()}`);
-      } catch (err) {
-        console.error(`❌ Error running tracking or blogging for ${repo}:`, err);
-      }
-
-      try {
-        const readmeUpdater = new versionTracker(this.owner, this.repos, {
-          branch: this.branch,
-          outDirName: 'commitsTracker',
-          dryRun: false
-        });
-
-        const results = await readmeUpdater.publish();
-
-        for (const r of results) {
-          if (r.kind === 'updated') {
-            console.log(`[readmeUpdater] UPDATED ${this.owner}/${r.repo} ${r.from} -> ${r.to} commit=${r.commitSha}`);
-          } else {
-            console.log(`[readmeUpdater] SKIP ${this.owner}/${r.repo} reason=${r.reason}`);
-          }
-        }
-      } catch (err) {
-        console.error('❌ Error updating READMEs:', err);
-      }
-    }
+  private async runFullTrackingForAllRepos(): Promise<void> {
+    await runRepositoryCycle(this.repos, {
+      track: repo => trackAndBlog(this.workflowContext(), repo),
+      publish: () => publishReadmes(this.workflowContext())
+    });
   }
 
   private scheduleNext() {
