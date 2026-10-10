@@ -10,11 +10,39 @@ import type { ChatMessage } from "../src/kittyChat/types";
 // Import after setting dummy credentials: the historical Chat module constructs
 // its OpenAI client and reads CHAT_KEY when the module is evaluated.
 const previousOpenAiKey = process.env.OPENAI_KEY;
-const previousChatKey = process.env.CHAT_KEY;
 process.env.OPENAI_KEY = "chat-mutation-parity-test";
-process.env.CHAT_KEY = Buffer.alloc(32, 0x43).toString("base64");
 const { default: Chat } = await import("../src/kittyChat");
-const { encryptChatMessage } = await import("../src/kittyChat/crypto");
+const { encryptValue, decryptValue } = await import("../src/kittyChat/crypto");
+const TEST_KEY = Buffer.alloc(32, 0x43);
+
+// Bun can reuse an already-loaded crypto module across test files. Pass the
+// fixture key explicitly instead of relying on its import-time CHAT_KEY.
+function encryptMessage(message: ChatMessage): ChatMessage {
+    return {
+        ...message,
+        nick: encryptValue(message.nick, TEST_KEY),
+        id: encryptValue(message.id, TEST_KEY),
+        msg: encryptValue(message.msg, TEST_KEY)
+    };
+}
+
+function decryptMessage(message: ChatMessage): ChatMessage {
+    return {
+        ...message,
+        nick: decryptValue(message.nick, TEST_KEY),
+        id: decryptValue(message.id, TEST_KEY),
+        msg: decryptValue(message.msg, TEST_KEY)
+    };
+}
+
+function configureChat(chat: InstanceType<typeof Chat>): void {
+    // The real Chat class retains processChatMessages and persistence logic.
+    // Only its private key-bound field codecs receive deterministic test keys.
+    Object.assign(chat, {
+        encryptChatMessage: encryptMessage,
+        decryptChatMessage: decryptMessage
+    });
+}
 
 afterAll(() => {
     if (previousOpenAiKey === undefined) {
@@ -23,11 +51,6 @@ afterAll(() => {
         process.env.OPENAI_KEY = previousOpenAiKey;
     }
 
-    if (previousChatKey === undefined) {
-        delete process.env.CHAT_KEY;
-    } else {
-        process.env.CHAT_KEY = previousChatKey;
-    }
 });
 
 type Handler = (req: Request, res: Response) => Promise<unknown>;
@@ -46,7 +69,7 @@ const initialMessages: ChatMessage[] = [
 async function createHarness() {
     const folder = await mkdtemp(join(tmpdir(), "chat-mutations-"));
     const file = join(folder, "chat.json");
-    await writeFile(file, JSON.stringify(initialMessages.map(encryptChatMessage)), "utf8");
+    await writeFile(file, JSON.stringify(initialMessages.map(encryptMessage)), "utf8");
 
     const handlers = new Map<string, Handler>();
     const server = {
@@ -55,6 +78,7 @@ async function createHarness() {
         }
     } as unknown as Server;
     const chat = new Chat(server, file, null as unknown as tokenStore);
+    configureChat(chat);
 
     const invoke = async (route: string, body: Record<string, unknown>): Promise<ResponseResult> => {
         const handler = handlers.get(route);
@@ -177,6 +201,7 @@ test("separate chat instances serialise edits to distinct messages in one store"
             app: { post: (route: string, handler: Handler) => { routes.set(route, handler); } }
         } as unknown as Server;
         const second = new Chat(server, file, null as unknown as tokenStore);
+        configureChat(second);
         // Both instances have separate MutexJsonStore objects pointing at the same file.
         const firstEdit = invoke("/chat/edit", edit("0a"));
         const secondEdit = (async () => {
