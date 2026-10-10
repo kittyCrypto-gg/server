@@ -42,7 +42,7 @@ test("legacy JSON rate-limit buckets migrate to protobuf with preserved counters
         expect(await limiter.consume({
             scope: "test", bucketKey: "client", windowMs: 1_000, maxAttempts: 3, now: 10_000
         })).toEqual({ allowed: true, retryAfterSeconds: 0, remainingAttempts: 0 });
-        expect(await readFile(path.join(dir, "limiter.pb"))).toHaveLength(expect.any(Number));
+        expect((await readFile(path.join(dir, "limiter.pb"))).length).toBeGreaterThan(0);
         expect(JSON.parse(await readFile(filePath, "utf8"))).toEqual(old);
     } finally {
         await rm(dir, { recursive: true, force: true });
