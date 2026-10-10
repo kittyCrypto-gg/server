@@ -27,7 +27,7 @@ function fixture(failure: "none" | "single" | "first-chunk" = "none") {
                 actions.push("single-error");
                 throw new Error("resulted in 30000 tokens");
             }
-            if (failure === "first-chunk" && json.includes("\n")) {
+            if (failure === "first-chunk" && json.includes("\n") && json.includes('"diff": "sample"')) {
                 actions.push("single-error");
                 throw new Error("resulted in 30000 tokens");
             }
