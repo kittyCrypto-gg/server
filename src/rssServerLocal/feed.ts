@@ -6,6 +6,7 @@ export interface LocalFeedConfig {
     title: string;
     description: string;
 }
+
 export function escapeXml(value: string): string {
     return value
         .replace(/&/g, "&amp;")
@@ -50,15 +51,15 @@ export function generateLocalRSS(posts: readonly LocalPost[], config: LocalFeedC
 }
 
 export function addLocalPostXmlMetadata(xml: string, posts: readonly LocalPost[], encode: (text: string) => string): string {
-let postIx = 0;
-return xml.replace(/<\/item>/g, (match: string): string => {
-    const post = posts[postIx];
-    postIx += 1;
-    if (!post) return match;
-    return [
-        `<author>${encode(post.author || "Kitty")}</author>`,
-        `<postId>${encode(post.postId)}</postId>`,
-        match
-    ].join("\n");
-});
+    let postIx = 0;
+    return xml.replace(/<\/item>/g, (match: string): string => {
+        const post = posts[postIx];
+        postIx += 1;
+        if (!post) return match;
+        return [
+            `<author>${encode(post.author || "Kitty")}</author>`,
+            `<postId>${encode(post.postId)}</postId>`,
+            match
+        ].join("\n");
+    });
 }
