@@ -1,31 +1,16 @@
 import express from "express";
-import type { Request, Response, Express } from "express";
+import type { Request, Express } from "express";
 import bodyParser from "body-parser";
 import process from "process";
 import https from "https";
 import cors from "cors";
-import net from "net";
 import fs from "fs";
 /* @ts-ignore */
 import "dotenv/config";
-
-type methods = "GET" | "POST" | "PUT" | "DELETE" | "OPTIONS";
-
-type RouteHandler = (
-  req: Request,
-  res: Response
-) => void | Promise<void> | Promise<Response<unknown, Record<string, unknown>> | undefined>;
-
-interface Middleware {
-  route?: {
-    path: string;
-    methods: Record<string, boolean>;
-  };
-  name?: string;
-  handle?: {
-    stack?: Middleware[];
-  };
-}
+import type { methods, RouteHandler } from "./baseServer/types";
+import * as corsLogic from "./baseServer/cors";
+import * as ports from "./baseServer/ports";
+import * as logging from "./baseServer/logging";
 
 class Server {
   public app: Express;
@@ -135,127 +120,45 @@ class Server {
   }
 
   protected async findFreePort(startPort = 3000, endPort = 4000): Promise<number> {
-    for (let port = startPort; port <= endPort; port++) {
-      if (await this.isPortFree(port)) return port;
-    }
-
-    throw new Error("No free ports available");
+    return await ports.findFreePort(port => this.isPortFree(port), startPort, endPort);
   }
 
   private isPortFree(port: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      const server = net.createServer();
+    return ports.isPortFree(port);
+  }
 
-      server.once("error", () => resolve(false));
-      server.once("listening", () => {
-        server.close();
-        resolve(true);
-      });
-
-      server.listen(port);
-    });
+  private corsContext(): corsLogic.CorsContext {
+    return {
+      publicCorsRoutes: this.publicCorsRoutes,
+      readRequestedCorsMethod: req => this.readRequestedCorsMethod(req),
+      isKnownMethod: (value): value is methods => this.isKnownMethod(value),
+      routeMatches: (routePath, requestPath) => this.routeMatches(routePath, requestPath)
+    };
   }
 
   private isPublicCorsRequest(req: Request): boolean {
-    const requestedMethod = this.readRequestedCorsMethod(req);
-
-    if (!requestedMethod) {
-      return false;
-    }
-
-    for (const [routePath, routeMethods] of this.publicCorsRoutes) {
-      if (!routeMethods.has(requestedMethod)) {
-        continue;
-      }
-
-      if (this.routeMatches(routePath, req.path)) {
-        return true;
-      }
-    }
-
-    return false;
+    return corsLogic.isPublicCorsRequest(this.corsContext(), req);
   }
 
   private getPublicCorsMethods(requestPath: string): methods[] {
-    const methodsForPath = new Set<methods>();
-
-    for (const [routePath, routeMethods] of this.publicCorsRoutes) {
-      if (!this.routeMatches(routePath, requestPath)) {
-        continue;
-      }
-
-      for (const method of routeMethods) {
-        methodsForPath.add(method);
-      }
-    }
-
-    return Array.from(methodsForPath);
+    return corsLogic.getPublicCorsMethods(this.corsContext(), requestPath);
   }
 
   private readRequestedCorsMethod(req: Request): methods | undefined {
-    const requestMethod = req.method.toUpperCase();
-    const candidate = requestMethod === "OPTIONS"
-      ? req.header("access-control-request-method")?.toUpperCase()
-      : requestMethod;
-
-    return this.isKnownMethod(candidate) ? candidate : undefined;
+    return corsLogic.readRequestedCorsMethod(this.corsContext(), req);
   }
 
   private isKnownMethod(value: string | undefined): value is methods {
-    return value === "GET"
-      || value === "POST"
-      || value === "PUT"
-      || value === "DELETE"
-      || value === "OPTIONS";
+    return corsLogic.isKnownMethod(this.corsContext(), value);
   }
 
   private routeMatches(routePath: string, requestPath: string): boolean {
-    if (!routePath.endsWith("*")) {
-      return routePath === requestPath;
-    }
-
-    const prefix = routePath.slice(0, -1);
-
-    return requestPath.startsWith(prefix) && requestPath.length > prefix.length;
+    return corsLogic.routeMatches(this.corsContext(), routePath, requestPath);
   }
 
   public logEndpoints(): void {
-    const appWithRouter = this.app as Express & {
-      _router?: {
-        stack?: Middleware[];
-      };
-    };
-    const router = appWithRouter._router;
-
-    if (!router || !Array.isArray(router.stack)) {
-      console.warn("⚠️ Express router not initialised yet");
-      return;
-    }
-
-    router.stack.forEach((middleware: Middleware) => {
-      if (middleware.route) {
-        console.log(
-          `Endpoint: https://${this.host}:${this.port}${middleware.route.path}, Method: ${Object.keys(middleware.route.methods).join(", ").toUpperCase()}`
-        );
-        return;
-      }
-
-      if (middleware.name !== "router" || !middleware.handle || !Array.isArray(middleware.handle.stack)) {
-        return;
-      }
-
-      middleware.handle.stack.forEach((handler: Middleware) => {
-        if (!handler.route) {
-          return;
-        }
-
-        console.log(
-          `Endpoint: https://${this.host}:${this.port}${handler.route.path}, Method: ${Object.keys(handler.route.methods).join(", ").toUpperCase()}`
-        );
-      });
-    });
+    logging.logEndpoints(this.app, this.host, this.port);
   }
-
   public getPort(): number | undefined {
     return this.port;
   }
