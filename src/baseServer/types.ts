@@ -1,3 +1,5 @@
+import type { Request, Response } from "express";
+
 export type methods = "GET" | "POST" | "PUT" | "DELETE" | "OPTIONS";
 
 export type RouteHandler = (
