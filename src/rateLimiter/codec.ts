@@ -1,6 +1,7 @@
 import * as protobuf from "protobufjs";
 import type { IConversionOptions } from "protobufjs";
 import type { ProtoBuffCodec } from "../mutexPBstore";
+import { createVerifiedProtoCodec } from "../protobufCodec";
 import type { limState } from "./types";
 
 const rateLimiterProtoSchema = `
@@ -27,24 +28,8 @@ const rateLimiterProtoConversionOptions: IConversionOptions = {
     objects: true
 };
 
-export const rateLimiterProtoCodec: ProtoBuffCodec<limState> = {
-    encode: (value: limState): Buffer => {
-        const validationError = rateLimiterMessageType.verify(value);
-
-        if (validationError !== null) {
-            throw new Error(`Rate limiter cannot encode invalid protobuf payload: ${validationError}`);
-        }
-
-        const message = rateLimiterMessageType.fromObject(value);
-        const encoded = rateLimiterMessageType.encode(message).finish();
-
-        return Buffer.from(encoded);
-    },
-
-    decode: (raw: Buffer): limState => {
-        const message = rateLimiterMessageType.decode(raw);
-        const plainObject = rateLimiterMessageType.toObject(message, rateLimiterProtoConversionOptions);
-
-        return plainObject as limState;
-    }
-};
+export const rateLimiterProtoCodec: ProtoBuffCodec<limState> = createVerifiedProtoCodec<limState>(
+    rateLimiterMessageType,
+    rateLimiterProtoConversionOptions,
+    "Rate limiter"
+);
