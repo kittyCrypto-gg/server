@@ -10,6 +10,7 @@ import type { ChatMessage, ChatRequest, ModeratorStrings } from "./kittyChat/typ
 import { encryptValue, decryptValue, encryptChatMessage, decryptChatMessage, generateMsgId, generateUserId } from "./kittyChat/crypto";
 import { loadModeratorStrings } from "./kittyChat/moderatorStrings";
 import { moderateMessage } from "./kittyChat/moderation";
+import { mutateChatMessage, type ChatMutationContext } from "./kittyChat/mutations";
 
 
 const apiKey = process.env.OPENAI_KEY || "";
@@ -54,129 +55,11 @@ class Chat extends KittyRequest<ChatMessage> {
     }
 
     private async editMessage(req: Request, res: Response): Promise<object> {
-        this.clearMessageCache();
-
-        const { msgId, sessionToken, ip, newMessage } = req.body;
-
-        if (
-            typeof msgId !== "string" ||
-            typeof sessionToken !== "string" ||
-            typeof ip !== "string" ||
-            typeof newMessage !== "string" ||
-            newMessage.trim().length === 0
-        ) {
-            return { error: "Missing required parameters" };
-        }
-
-        try {
-            let found = false;
-            let unauthorised = false;
-            let updatedMessages: ChatMessage[] | null = null;
-
-            await this.updateFileData(async (currentEncrypted: ChatMessage[]): Promise<ChatMessage[]> => {
-                const messages = this.processChatMessages(currentEncrypted, false);
-                const index = messages.findIndex((message) => message.msgId === msgId);
-
-                if (index === -1) {
-                    return currentEncrypted;
-                }
-
-                found = true;
-
-                const msgIdBint = BigInt(msgId);
-                const sessionBint = BigInt(`0x${sessionToken}`);
-
-                if (msgIdBint % sessionBint !== BigInt(0)) {
-                    unauthorised = true;
-                    return currentEncrypted;
-                }
-
-                console.log(`✏️ Editing message ${msgId}`);
-
-                const nextMessages = [...messages];
-                nextMessages[index] = {
-                    ...nextMessages[index],
-                    msg: newMessage,
-                    edited: true,
-                };
-
-                updatedMessages = nextMessages;
-                return this.processChatMessages(nextMessages, true);
-            });
-
-            if (!found) {
-                return { error: "Message not found" };
-            }
-
-            if (unauthorised) {
-                return res.status(403).send({ error: "Unauthorised" });
-            }
-
-            this.messageCache = updatedMessages;
-            return { success: true };
-        } catch (error) {
-            console.error("❌ Error processing edit request:", error);
-            return { error: "Internal Server Error" };
-        }
+        return mutateChatMessage(this as unknown as ChatMutationContext, "edit", req, res);
     }
 
     private async deleteMessage(req: Request, res: Response): Promise<object> {
-        this.clearMessageCache();
-
-        const { msgId, sessionToken, ip } = req.body;
-
-        if (
-            typeof msgId !== "string" ||
-            typeof sessionToken !== "string" ||
-            typeof ip !== "string"
-        ) {
-            return { error: "Missing required parameters" };
-        }
-
-        try {
-            let found = false;
-            let unauthorised = false;
-            let updatedMessages: ChatMessage[] | null = null;
-
-            await this.updateFileData(async (currentEncrypted: ChatMessage[]): Promise<ChatMessage[]> => {
-                const messages = this.processChatMessages(currentEncrypted, false);
-                const index = messages.findIndex((message) => message.msgId === msgId);
-
-                if (index === -1) {
-                    return currentEncrypted;
-                }
-
-                found = true;
-
-                const msgIdBint = BigInt(msgId);
-                const sessionBint = BigInt(`0x${sessionToken}`);
-
-                if (msgIdBint % sessionBint !== BigInt(0)) {
-                    unauthorised = true;
-                    return currentEncrypted;
-                }
-
-                console.log(`🗑️ Deleting message ${msgId}`);
-
-                const nextMessages = messages.filter((_, messageIndex) => messageIndex !== index);
-                updatedMessages = nextMessages;
-                return this.processChatMessages(nextMessages, true);
-            });
-
-            if (!found) {
-                return { error: "Message not found" };
-            }
-
-            if (unauthorised) {
-                return res.status(403).send({ error: "Unauthorised" });
-            }
-
-            this.messageCache = updatedMessages;
-            return { success: true };
-        } catch (error) {
-            console.error("❌ Error processing delete request:", error);
-            return { error: "Internal Server Error" };
-        }
+        return mutateChatMessage(this as unknown as ChatMutationContext, "delete", req, res);
     }
 
     private async moderateMessage(userMessage: string): Promise<string> {
