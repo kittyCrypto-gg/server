@@ -39,7 +39,7 @@ test('history lookup selects the latest matching JSON file and final commit vers
         await writeFile(join(dir, '2026-10-08-GithubTracker-example-website.json'), make('1.0'));
         await writeFile(join(dir, '2026-10-09-GithubTracker-example-website.json'), make('2.1'));
         await writeFile(join(dir, '2026-10-10-GithubTracker-example-other.json'), make('5.0'));
-        const result = await getLatestHistoryFile(dir, pattern);
+        const result = await getLatestHistoryFile(dir, () => pattern);
         expect(result?.file).toBe('2026-10-09-GithubTracker-example-website.json');
         expect(result && latestHistoryVersion(result.data)).toBe('2.1');
     } finally {
@@ -51,9 +51,9 @@ test('history lookup retains null for missing or invalid JSON files', async () =
     const dir = await mkdtemp(join(tmpdir(), 'readme-bad-history-'));
     const pattern = historyFilePattern('example', 'website');
     try {
-        expect(await getLatestHistoryFile(dir, pattern)).toBeNull();
+        expect(await getLatestHistoryFile(dir, () => pattern)).toBeNull();
         await writeFile(join(dir, '2026-10-10-GithubTracker-example-website.json'), '{bad json');
-        expect(await getLatestHistoryFile(dir, pattern)).toBeNull();
+        expect(await getLatestHistoryFile(dir, () => pattern)).toBeNull();
         expect(latestHistoryVersion({ repo: 'website', createdAt: '', commits: [] })).toBeNull();
     } finally {
         await rm(dir, { recursive: true, force: true });

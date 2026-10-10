@@ -55,7 +55,7 @@ export class versionTracker {
         return historyFilePattern(this.owner, repo);
     }
     private async getLatestFile(repo: string): Promise<{ file: string; data: RepoHistory } | null> {
-        return await getLatestHistoryFile(this.dataDir, this.getHisFilePatt(repo));
+        return await getLatestHistoryFile(this.dataDir, () => this.getHisFilePatt(repo));
     }
     private latestVer(history: RepoHistory): string | null {
         return latestHistoryVersion(history);

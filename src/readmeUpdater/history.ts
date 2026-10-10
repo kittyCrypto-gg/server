@@ -7,7 +7,7 @@ import type { RepoHistory } from './types';
     }
 
 
-    export async function getLatestHistoryFile(dataDir: string, pattern: RegExp): Promise<{ file: string; data: RepoHistory } | null> {
+    export async function getLatestHistoryFile(dataDir: string, getPattern: () => RegExp): Promise<{ file: string; data: RepoHistory } | null> {
         let files: string[] = [];
         try {
             files = await readdir(dataDir);
@@ -15,6 +15,7 @@ import type { RepoHistory } from './types';
             return null;
         }
 
+        const pattern = getPattern();
         const matches = files.filter((f) => pattern.test(f));
         if (!matches.length) return null;
 
