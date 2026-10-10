@@ -6,18 +6,11 @@ import path from "path";
 import "dotenv/config";
 import type { GithubAutoSchedulerOptions } from "./blogScheduler/types";
 import { msUntilNextSunday } from "./blogScheduler/timing";
+import { runRepositoryCycle } from "./blogScheduler/runner";
 import { trackAndBlog, publishReadmes, type SchedulerContext } from "./blogScheduler/workflows";
 
 const apiKey = process.env.OPENAI_KEY || "";
 const openai = new OpenAI({ apiKey });
-
-type GithubAutoSchedulerOptions = {
-  owner: string;
-  repos: string[];
-  blogUser?: string;
-  branch?: string;
-  sinceDays?: number;
-};
 
 export class GithubAutoScheduler {
   private owner: string;
@@ -57,20 +50,11 @@ export class GithubAutoScheduler {
     };
   }
 
-  private async runFullTrackingForAllRepos() {
-    for (const repo of this.repos) {
-      try {
-        await trackAndBlog(this.workflowContext(), repo);
-      } catch (err) {
-        console.error(`❌ Error running tracking or blogging for ${repo}:`, err);
-      }
-
-      try {
-        await publishReadmes(this.workflowContext());
-      } catch (err) {
-        console.error('❌ Error updating READMEs:', err);
-      }
-    }
+  private async runFullTrackingForAllRepos(): Promise<void> {
+    await runRepositoryCycle(this.repos, {
+      track: repo => trackAndBlog(this.workflowContext(), repo),
+      publish: () => publishReadmes(this.workflowContext())
+    });
   }
 
   private scheduleNext() {
