@@ -1,4 +1,6 @@
 import type { Request } from "express";
+import { getClientIp } from "../requestIp";
+export { getClientIp } from "../requestIp";
 import type { handlerOpts, rlArgs, limState, StoredRateLimitBucket } from "./types";
 
 
@@ -56,19 +58,3 @@ export function validateArgs(args: rlArgs): void {
     }
 }
 
-export function getClientIp(req: Request): string {
-    const cf = req.headers["cf-connecting-ip"];
-
-    if (typeof cf === "string" && cf.trim()) return cf.trim();
-
-    const xff = req.headers["x-forwarded-for"];
-    const raw = Array.isArray(xff) ? xff[0] : xff;
-
-    let ip = typeof raw === "string" && raw.trim()
-        ? raw.split(",")[0]!.trim()
-        : (req.socket.remoteAddress || "");
-
-    if (ip.startsWith("::ffff:")) ip = ip.substring(7);
-
-    return ip;
-}
