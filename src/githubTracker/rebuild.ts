@@ -1,7 +1,7 @@
-import { writeFile } from "fs/promises";
-import path from "path";
 import * as versioning from "./versioning";
-import type { BumpTier, DecimalPrecision, DecimalVersion, RepoIdentifier, CommitSummary, RepoHistory, SetverDirective, GitHubCommit, LlmTierJson } from "./types";
+import { replayRebuildCommit } from "./rebuild/replay";
+import { createRebuildFlusher } from "./rebuild/storage";
+import type { DecimalVersion, RepoIdentifier, CommitSummary, RepoHistory } from "./types";
 import type { TrackerContext } from "./context";
 
 export async function rebuildAll(
@@ -38,170 +38,28 @@ export async function rebuildAll(
       let lastSeenMajor = 0;
 
       let pending: CommitSummary[] = [];
-      let lastStampUsed: string | null = null;
-
-      const flush = async (stampIso: string): Promise<void> => {
-        if (!pending.length) return;
-
-        let stamp = ctx.stampFromIso(stampIso);
-        while (lastStampUsed !== null && stamp <= lastStampUsed) {
-          stamp = ctx.bumpStampByOneSecond(stamp);
-        }
-
-        lastStampUsed = stamp;
-
-        const fileName = `${stamp}-GithubTracker-${ctx.owner}-${repo}.json`;
-        const filePath = path.join(ctx.outDir, fileName);
-
-        const history: RepoHistory = {
-          repo,
-          createdAt: stampIso,
-          commits: pending
-        };
-
-        console.log(
-          `[GithubTracker][${ctx.owner}/${repo}] Flush: writing ${pending.length} commit(s) to ${fileName}...`
-        );
-
-        await writeFile(filePath, JSON.stringify(history, null, 2), 'utf-8');
-        histories.push(history);
-
-        console.log(
-          `[GithubTracker][${ctx.owner}/${repo}] Flush: wrote ${pending.length} commit(s) to ${fileName}`
-        );
-
-        pending = [];
-      };
+      const flush = createRebuildFlusher(ctx, repo, histories);
 
       console.log(
         `[GithubTracker][${ctx.owner}/${repo}] Step 3/3: Replaying ${items.length} commit(s) with versioning...`
       );
 
       const progressEvery = Math.max(1, Math.floor(items.length / 200)); // about 0.5% updates
-      const logMsg = (msg: string): string => {
-        const oneLine = msg.replace(/\s+/g, ' ').trim();
-        if (oneLine.length <= 120) return oneLine;
-        return oneLine.slice(0, 117) + '...';
-      };
-
       for (let i = 0; i < items.length; i += 1) {
-        const commitObj = items[i];
-
-        const sha = commitObj.sha;
-        const author = commitObj.commit.author?.name || '';
-        const date = commitObj.commit.author?.date || '';
-        const message = commitObj.commit.message || '';
-        const htmlUrl = commitObj.html_url || '';
-
-        const idx = i + 1;
-        const pct = ((idx / items.length) * 100).toFixed(1);
-
-        if (i === 0) {
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}] First commit: idx=${idx}/${items.length} (${pct}%) sha=${sha}`
-          );
-        }
-        if (i !== 0 && (i % progressEvery) === 0) {
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}] Progress: idx=${idx}/${items.length} (${pct}%) currentVersion=${versioning.formatVer(current)}`
-          );
-        }
-
-        console.log(
-          `[GithubTracker][${ctx.owner}/${repo}] Checking commit ${idx}/${items.length} (${pct}%) sha=${sha} ` +
-          `date=${date || '(no-date)'} author=${author || '(no-author)'} msg="${logMsg(message)}"`
+        const replayed = await replayRebuildCommit(
+          ctx, repo, items[i], i, items.length, progressEvery, current, lastSeenMajor
         );
-
-        console.log(`[GithubTracker][${ctx.owner}/${repo}]   - Fetching diff for ${sha}...`);
-        const diff = await ctx.fetchDiff(repo, sha);
-        console.log(`[GithubTracker][${ctx.owner}/${repo}]   - Diff fetched (${diff.length} chars).`);
-
-        console.log(`[GithubTracker][${ctx.owner}/${repo}]   - Reading README.md at ${sha} to detect major...`);
-        const commitMajor = await ctx.tryReadmeMajorAtSha(repo, sha, lastSeenMajor);
-
-        if (commitMajor > 0 && commitMajor !== lastSeenMajor) {
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}]   - README major changed: ${lastSeenMajor} -> ${commitMajor}`
-          );
-          lastSeenMajor = commitMajor;
-        } else {
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}]   - README major detected: ${commitMajor} (lastSeenMajor=${lastSeenMajor})`
-          );
-        }
-
-        const before = versioning.formatVer(current);
-        const setver = versioning.parseSetverDirective(message);
-
-        let storedVersionOverride: string | null = null;
-
-        if (setver?.kind === "explicit") {
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}]   - Found !setver explicit override: ${setver.rawVersion} (was ${before})`
-          );
-          current = versioning.parseVer(setver.rawVersion);
-          storedVersionOverride = setver.rawVersion;
-        }
-
-        if (setver?.kind === "readmeMajor" && commitMajor > 0) {
-          const nextFromReadme = versioning.setverToReadmeMajor(commitMajor);
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}]   - Found !setver (README major): ${before} -> ${versioning.formatVer(nextFromReadme)}`
-          );
-          current = nextFromReadme;
-        }
-
-        if (setver?.kind === "readmeMajor" && commitMajor <= 0) {
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}]   - Found !setver but README major not detected, leaving version unchanged (current=${before})`
-          );
-        }
-
-        const taggedTier = !setver ? versioning.tierFromMsg(message) : null;
-        if (!setver && taggedTier) {
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}]   - Tier decided from tag: ${taggedTier}`
-          );
-        }
-        if (!setver && !taggedTier) {
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}]   - No tier tag found. Asking LLM to classify...`
-          );
-        }
-
-        const tier = !setver ? (taggedTier ?? await ctx.genTier(message, diff)) : null;
-        if (!setver && !taggedTier) {
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}]   - LLM tier: ${tier}`
-          );
-        }
-        if (!setver && tier !== null) {
-          const next = versioning.bumpVer(current, tier);
-          current = next;
-          const after = versioning.formatVer(current);
-          console.log(
-            `[GithubTracker][${ctx.owner}/${repo}]   - Version bump: ${before} -> ${after} (tier=${tier})`
-          );
-        }
-
-        const version = storedVersionOverride ?? versioning.formatVer(current);
-
-        pending.push({
-          sha,
-          author,
-          date,
-          message,
-          url: htmlUrl,
-          diff,
-          version
-        });
+        current = replayed.current;
+        lastSeenMajor = replayed.lastSeenMajor;
+        pending.push(replayed.summary);
 
         if (pending.length >= commitsPerFile) {
           const stampIso = pending[pending.length - 1]?.date || new Date().toISOString();
           console.log(
             `[GithubTracker][${ctx.owner}/${repo}] Chunk reached ${commitsPerFile} commit(s). Flushing to disk...`
           );
-          await flush(stampIso);
+          await flush(pending, stampIso);
+          pending = [];
         }
       }
 
@@ -210,7 +68,8 @@ export async function rebuildAll(
         console.log(
           `[GithubTracker][${ctx.owner}/${repo}] Final flush (${pending.length} remaining commit(s))...`
         );
-        await flush(stampIso);
+        await flush(pending, stampIso);
+        pending = [];
       }
 
       results[repo] = histories;
