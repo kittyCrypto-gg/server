@@ -4,27 +4,13 @@ import { tokenStore } from "./tokenStore";
 import Server from "./baseServer";
 import { OpenAI } from "openai";
 import path from "path";
-import fs from "fs";
 import { normaliseCommentPage } from "./commentPage";
+import { isValidURL, loadModeratorStrings, moderateSubmittedComment, type ModeratorStrings } from "./comments/shared";
 /* @ts-ignore */
 import "dotenv/config";
 
 const apiKey = process.env.OPENAI_KEY || "";
 const openai = new OpenAI({ apiKey });
-
-interface ModeratorStrings {
-  role?: string;
-  user?: string;
-}
-
-function isValidURL(value: string): boolean {
-  try {
-    new URL(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export interface CommentData {
   page: string;
@@ -68,43 +54,11 @@ class Comment extends KittyRequest<CommentData> {
   }
 
   private loadModeratorStrings(): { [key: string]: ModeratorStrings } {
-    try {
-      const raw = fs.readFileSync(this.stringsFilePath, "utf-8");
-      const parsed = JSON.parse(raw) as unknown;
-
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return {};
-      }
-
-      return parsed as { [key: string]: ModeratorStrings };
-    } catch {
-      throw new Error("Could not load moderator strings.");
-    }
+    return loadModeratorStrings(this.stringsFilePath);
   }
 
   private async moderateComment(rawMsg: string): Promise<string> {
-    try {
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              this.strings.moderator?.role ||
-              "You are a moderator. Please moderate the following message:"
-          },
-          {
-            role: "user",
-            content: `The user submitted the following comment:\n\n${rawMsg}`
-          }
-        ]
-      });
-
-      return response.choices[0].message.content ?? "Error moderating comment.";
-    } catch (error) {
-      console.error("❌ AI moderation failed:", error);
-      return "ERROR";
-    }
+    return moderateSubmittedComment(rawMsg, this.strings, openai, "comment", "❌ AI moderation failed:");
   }
 
   private async storeComment(req: Request, res: Response): Promise<object> {
