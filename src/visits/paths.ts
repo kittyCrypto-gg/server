@@ -1,52 +1,20 @@
-import { promises as fs } from "fs"
-import * as path from "path"
-
-type NodeErrorWithCode = Error & { code?: string }
-import type { VisitsContext } from "./context"
-import type { UnixTimestampMs, VisitEntry, VisitBucket, VisitsModel, LegacyIsoTimestamp, LegacyVisitEntry, LegacyVisitBucket, LegacyVisitsModel, VisitsModelInput, VisitsStats, PageVisitsStats, PageVisitsLogResult, VisitsLogResult, VisitsStoreOptions, VisitsStorePaths, VisitsBackingStore } from "./types"
+import path from "node:path";
+import type { VisitsContext } from "./context";
+import type { VisitsStorePaths } from "./types";
+import { resolveProtoJsonStorePaths, replaceFileExtension, storeFileExists } from "../storePaths";
 
 export function resolveStorePaths(ctx: VisitsContext, filePath: string | undefined): VisitsStorePaths {
-        const resolvedFilePath = filePath ?? path.resolve(process.cwd(), "data", "visits.pb")
-        const extension = path.extname(resolvedFilePath).toLowerCase()
-
-        if (extension === ".json") {
-            return {
-                protoBuffFilePath: ctx.replaceExtension(resolvedFilePath, ".pb"),
-                legacyJsonFilePath: resolvedFilePath
-            }
-        }
-
-        if (extension === ".pb") {
-            return {
-                protoBuffFilePath: resolvedFilePath,
-                legacyJsonFilePath: ctx.replaceExtension(resolvedFilePath, ".json")
-            }
-        }
-
-        return {
-            protoBuffFilePath: `${resolvedFilePath}.pb`,
-            legacyJsonFilePath: `${resolvedFilePath}.json`
-        }
+    return resolveProtoJsonStorePaths(filePath, {
+        defaultFilePath: path.resolve(process.cwd(), "data", "visits.pb"),
+        trimProvidedPath: false,
+        replaceExtension: (candidate, ext) => ctx.replaceExtension(candidate, ext)
+    });
 }
 
 export function replaceExtension(ctx: VisitsContext, filePath: string, extension: string): string {
-        const parsed = path.parse(filePath)
-
-        return path.join(parsed.dir, `${parsed.name}${extension}`)
+    return replaceFileExtension(filePath, extension);
 }
 
 export async function fileExists(ctx: VisitsContext, filePath: string): Promise<boolean> {
-        try {
-            await fs.access(filePath)
-
-            return true
-        } catch (err: unknown) {
-            const code = (err as NodeErrorWithCode).code
-
-            if (code === "ENOENT") {
-                return false
-            }
-
-            throw err
-        }
+    return storeFileExists(filePath);
 }
