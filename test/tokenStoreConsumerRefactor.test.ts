@@ -5,7 +5,6 @@ import type { TokenStoreContext } from "../src/tokenStore/context";
 
 const expectedPrototypeMethods = [
   "constructor",
-  "constructor",
   "createStoredState",
   "dispose",
   "dropToken",
