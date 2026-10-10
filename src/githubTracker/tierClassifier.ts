@@ -1,28 +1,7 @@
 import type { BumpTier, DecimalPrecision, DecimalVersion, RepoIdentifier, CommitSummary, RepoHistory, SetverDirective, GitHubCommit, LlmTierJson } from "./types";
 import type { TrackerContext } from "./context";
-
-export function estTokens(str: string): number {
-    const bytes = Buffer.byteLength(str, 'utf8');
-    return Math.ceil(bytes / 2);
-}
-
-export function truncateDiff(diff: string, maxChars: number): string {
-    if (diff.length <= maxChars) return diff;
-
-    const headChars = Math.floor(maxChars * 0.6);
-    const tailChars = maxChars - headChars;
-
-    const head = diff.slice(0, headChars).trimEnd();
-    const tail = diff.slice(diff.length - tailChars).trimStart();
-
-    return [
-      head,
-      '',
-      '... [diff truncated for length] ...',
-      '',
-      tail
-    ].join('\n');
-}
+import { estimateTokens as estTokens, truncateDiff } from "../textBudget";
+export { estimateTokens as estTokens, truncateDiff } from "../textBudget";
 
 export function parseTJson(raw: string): { tier: Exclude<BumpTier, "skip">; confidence: number } | null {
     try {
