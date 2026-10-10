@@ -44,7 +44,7 @@ function parseRenderJob(value: unknown): RenderJob {
   };
 }
 
-async function readRenderJob(request: Request): Promise<RenderJob> {
+export async function readRenderJob(request: Request): Promise<RenderJob> {
   if (request.method === "GET") {
     const url = new URL(request.url);
     const target = url.searchParams.get("url");
@@ -65,7 +65,7 @@ async function readRenderJob(request: Request): Promise<RenderJob> {
   throw new InputError("Only GET and POST are supported.");
 }
 
-function assertToken(request: Request, config: RenderConfig): void {
+export function assertToken(request: Request, config: RenderConfig): void {
   if (!config.token) {
     return;
   }

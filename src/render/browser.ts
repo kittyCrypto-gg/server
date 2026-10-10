@@ -31,7 +31,7 @@ function createBrowser(config: RenderConfig): Promise<Browser> {
   return launchBrowser();
 }
 
-async function getBrowser(config: RenderConfig): Promise<Browser> {
+export async function getBrowser(config: RenderConfig): Promise<Browser> {
   if (browserPromise === null) {
     browserPromise = createBrowser(config);
   }

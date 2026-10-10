@@ -99,7 +99,7 @@ export async function installTracking(page: Page): Promise<void> {
   });
 }
 
-async function waitForSettle(page: Page, timeoutMs: number): Promise<void> {
+export async function waitForSettle(page: Page, timeoutMs: number): Promise<void> {
   await page.waitForFunction(
     () => {
       const win = window as Window & {

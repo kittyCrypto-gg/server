@@ -25,7 +25,7 @@ export interface RenderConfig {
   executablePath?: string;
 }
 
-type RenderState = {
+export type RenderState = {
   inflight: number;
   mutationCount: number;
   lastCheckedMutationCount: number;
