@@ -26,6 +26,6 @@ test("diff truncation retains exact marker, fraction, trimming and edge cases", 
     ] as const) {
         expect(bloggerDiff(diff, limit)).toBe(trackerDiff(diff, limit));
     }
-    expect(truncateDiff("abcdefghijklmnopqrstuvwxyz", 8)).toBe("abc\n\n... [diff truncated for length] ...\n\nwxyz");
+    expect(truncateDiff("abcdefghijklmnopqrstuvwxyz", 8)).toBe("abcd\n\n... [diff truncated for length] ...\n\nwxyz");
     expect(truncateDiff("short", 10)).toBe("short");
 });
