@@ -9,6 +9,9 @@ import { ensureMigrated as ensureMigrated_operation, migrateLegacyJsonIfNeeded a
 import { loadTokenStore as loadTokenStore_operation, saveTokenStore as saveTokenStore_operation, scheduleSaveTokenStore as scheduleSaveTokenStore_operation } from "./tokenStore/persistence";
 import { startCleanup as startCleanup_operation } from "./tokenStore/cleanup";
 
+import { initialiseTokenStore as initialiseTokenStore_operation, waitUntilTokenStoreReady as waitUntilTokenStoreReady_operation, tokenExistsAndValidAsync as tokenExistsAndValidAsync_operation, disposeTokenStore as disposeTokenStore_operation } from "./tokenStore/lifecycle";
+import { touchSessionToken as touchSessionToken_operation, dropSessionToken as dropSessionToken_operation, isSessionTokenValid as isSessionTokenValid_operation, sessionTokenExpiryMs as sessionTokenExpiryMs_operation } from "./tokenStore/sessions";
+
 export type { TokenMeta, TokenStoreJson, SessionTokenStoreOpts, SessionTokenSink } from "./tokenStore/types";
 
 export class tokenStore {
@@ -62,33 +65,11 @@ export class tokenStore {
     }
 
     public init(): void {
-        if (this.initPromise) return;
-
-        this.initPromise = (async (): Promise<void> => {
-            await this.loadTokenStore();
-            this.onTokensChanged(this.sessionTokens);
-            this.startCleanup();
-            this.initialised = true;
-        })().catch((err: unknown) => {
-            const e = err instanceof Error ? err : new Error(String(err));
-            this.initError = e;
-            console.error("❌ Failed to initialise token store:", e);
-            throw e;
-        });
+        return initialiseTokenStore_operation(this as unknown as TokenStoreContext);
     }
 
     public async waitUntilReady(): Promise<void> {
-        if (this.initialised) return;
-
-        if (!this.initPromise) {
-            const e = new Error("tokenStore.init() was not called.");
-            this.initError = e;
-            throw e;
-        }
-
-        if (this.initError) throw this.initError;
-
-        await this.initPromise;
+        return waitUntilTokenStoreReady_operation(this as unknown as TokenStoreContext);
     }
 
     private parseTimeString(value: string): number | null {
@@ -96,46 +77,27 @@ export class tokenStore {
     }
 
     public async tokenExistsAndValidAsync(token: string): Promise<boolean> {
-        await this.waitUntilReady();
-
-        return this.tokenExistsAndValid(token);
+        return tokenExistsAndValidAsync_operation(this as unknown as TokenStoreContext, token);
     }
 
     public dispose(): void {
-        if (this.savePending) clearTimeout(this.savePending);
-        if (this.cleanupTimer) clearInterval(this.cleanupTimer);
-
-        this.savePending = null;
-        this.cleanupTimer = null;
+        return disposeTokenStore_operation(this as unknown as TokenStoreContext);
     }
 
     public touchToken(token: string): void {
-        this.tokenMeta.set(token, { expiresAtMs: Date.now() + this.ttlMs });
-        this.sessionTokens.add(token);
-        this.scheduleSaveTokenStore();
-        this.onTokensChanged(this.sessionTokens);
+        return touchSessionToken_operation(this as unknown as TokenStoreContext, token);
     }
 
     public dropToken(token: string): void {
-        this.tokenMeta.delete(token);
-        this.sessionTokens.delete(token);
-        this.scheduleSaveTokenStore();
-        this.onTokensChanged(this.sessionTokens);
+        return dropSessionToken_operation(this as unknown as TokenStoreContext, token);
     }
 
     public tokenExistsAndValid(token: string): boolean {
-        const meta = this.tokenMeta.get(token);
-
-        if (!meta) return false;
-        if (meta.expiresAtMs <= Date.now()) return false;
-
-        return true;
+        return isSessionTokenValid_operation(this as unknown as TokenStoreContext, token);
     }
 
     public getExpiryMs(token: string): number | null {
-        const meta = this.tokenMeta.get(token);
-
-        return meta ? meta.expiresAtMs : null;
+        return sessionTokenExpiryMs_operation(this as unknown as TokenStoreContext, token);
     }
 
     private startCleanup(): void {
