@@ -1,6 +1,7 @@
 import * as protobuf from "protobufjs"
 import type { IConversionOptions } from "protobufjs"
-import type { ProtoBuffCodec } from "../mutexPBstore"
+import type { ProtoBuffCodec } from "../mutexPBstore";
+import { createVerifiedProtoCodec } from "../protobufCodec";
 import type { VisitsModel } from "./types"
 
 export const visitsProtoSchema = `
@@ -33,24 +34,8 @@ export const visitsProtoConversionOptions: IConversionOptions = {
     objects: true
 }
 
-export const visitsProtoCodec: ProtoBuffCodec<VisitsModel> = {
-    encode: (value: VisitsModel): Buffer => {
-        const validationError = visitsMessageType.verify(value)
-
-        if (validationError !== null) {
-            throw new Error(`VisitsStore cannot encode invalid protobuf payload: ${validationError}`)
-        }
-
-        const message = visitsMessageType.fromObject(value)
-        const encoded = visitsMessageType.encode(message).finish()
-
-        return Buffer.from(encoded)
-    },
-
-    decode: (raw: Buffer): VisitsModel => {
-        const message = visitsMessageType.decode(raw)
-        const plainObject = visitsMessageType.toObject(message, visitsProtoConversionOptions)
-
-        return plainObject as VisitsModel
-    }
-}
+export const visitsProtoCodec: ProtoBuffCodec<VisitsModel> = createVerifiedProtoCodec<VisitsModel>(
+    visitsMessageType,
+    visitsProtoConversionOptions,
+    "VisitsStore"
+);

@@ -1,6 +1,7 @@
 import * as protobuf from "protobufjs"
 import type { IConversionOptions } from "protobufjs"
-import type { ProtoBuffCodec } from "../mutexPBstore"
+import type { ProtoBuffCodec } from "../mutexPBstore";
+import { createVerifiedProtoCodec } from "../protobufCodec";
 import type { TrSitesState } from "./types"
 
 const pbSchema = `
@@ -41,24 +42,8 @@ const pbConv: IConversionOptions = {
     objects: true
 }
 
-export const pbCodec: ProtoBuffCodec<TrSitesState> = {
-    encode: (val: TrSitesState): Buffer => {
-        const err = pbType.verify(val)
-
-        if (err !== null) {
-            throw new Error(`TrSitesStore cannot encode invalid protobuf payload: ${err}`)
-        }
-
-        const msg = pbType.fromObject(val)
-        const enc = pbType.encode(msg).finish()
-
-        return Buffer.from(enc)
-    },
-
-    decode: (raw: Buffer): TrSitesState => {
-        const msg = pbType.decode(raw)
-        const obj = pbType.toObject(msg, pbConv)
-
-        return obj as TrSitesState
-    }
-}
+export const pbCodec: ProtoBuffCodec<TrSitesState> = createVerifiedProtoCodec<TrSitesState>(
+    pbType,
+    pbConv,
+    "TrSitesStore"
+);
