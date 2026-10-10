@@ -1,6 +1,6 @@
 import type { OpenAIAPIErrorShape, ModeratorStrings, CommitEntry, BritishSpellcheckChunkResponse, LineChange, CommitLog } from "./types";
 import type { BloggerContext } from "./context";
-import { estimateTokens } from "../textBudget";
+import { estimateTokens, truncateDiff } from "../textBudget";
 export { estimateTokens, truncateDiff } from "../textBudget";
 
 export function normalise(ctx: BloggerContext, json: CommitLog, maxDiffCharsPerCommit: number): CommitLog {
