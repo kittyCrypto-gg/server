@@ -88,6 +88,9 @@ describe("tokenStore deep-import consumer contract", () => {
         internals.loadTokenStore = async () => undefined;
         internals.startCleanup = () => undefined;
         store.init();
+        // Pre-init checks record initError: it is intentionally not cleared by init().
+        // Only after the load completes does initialised short-circuit that error.
+        await internals.initPromise;
         expect(await store.tokenExistsAndValidAsync("not-issued")).toBe(false);
         store.dispose();
     });
