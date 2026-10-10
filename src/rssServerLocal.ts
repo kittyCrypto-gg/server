@@ -44,12 +44,25 @@ class RssServerLocal extends RssServer {
         this.registerLocalBlogRoute();
     }
 
-    private readAuthorLine(raw: string): string | null { return readAuthorLine(raw); }
-    private escapeXml(value: string): string { return escapeXml(value); }
-    private readString(value: unknown): string | null { return readString(value); }
-    private readIsoDate(value: unknown): string | null { return readIsoDate(value); }
-    private readTags(value: unknown): string[] | undefined { return readTags(value); }
-    private makePostId(post: LocalPostDraft): string { return makePostId(post, this.localFeedSlug); }
+    private readAuthorLine(raw: string): string | null {
+        return readAuthorLine(raw);
+    }
+    private escapeXml(value: string): string {
+        return escapeXml(value);
+    }
+    private readString(value: unknown): string | null {
+        return readString(value);
+    }
+    private readIsoDate(value: unknown): string | null {
+        return readIsoDate(value);
+    }
+    private readTags(value: unknown): string[] | undefined {
+        return readTags(value);
+    }
+    private makePostId(post: LocalPostDraft): string {
+        return makePostId(post, this.localFeedSlug);
+    }
+
     private async loadLocalPosts(): Promise<LocalPost[]> {
         return await loadLocalPosts(this.localPostsDir, {
             readAuthorLine: raw => this.readAuthorLine(raw),
@@ -59,6 +72,7 @@ class RssServerLocal extends RssServer {
             makePostId: post => this.makePostId(post)
         });
     }
+
     private generateLocalRSS(posts: readonly LocalPost[]): Feed {
         return generateLocalRSS(posts, {
             slug: this.localFeedSlug,
@@ -66,6 +80,7 @@ class RssServerLocal extends RssServer {
             description: this.localFeedDescription
         });
     }
+
     private registerLocalBlogRoute(): void {
         this.app.get(`/rss/${this.localFeedSlug}`, async (_req, res) => {
             console.log("📤 RSS feed served: /rss/" + this.localFeedSlug);
