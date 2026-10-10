@@ -26,6 +26,18 @@ function response(body: string, status = 200, contentLength: string | null = nul
     }
 }
 
+test("site keys, input guards and missing registration base URL remain unchanged", async () => {
+    await withStore(async store => {
+        const logic = new TrSites({ store })
+        expect(logic.mkSiteKey("https://www.EXAMPLE.org:8443")).toBe("example-org-8443")
+        expect(logic.siteToOrig("EXAMPLE.org")).toBe("https://example.org")
+        await expect(logic.reg({ site: "example.org", now: NOW })).rejects.toThrow(
+            "Server base URL is required to build the key-file download URL."
+        )
+        expect(await store.listChals(NOW)).toEqual([])
+    })
+})
+
 test("registration preserves key file, canonical site, URL and expiry", async () => {
     await withStore(async store => {
         const logic = new TrSites({ store, srvBaseUrl: "https://kittycrow.dev/" })

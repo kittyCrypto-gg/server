@@ -75,13 +75,33 @@ export class TrSites {
         return this.store.normOrig(origin)
     }
 
-    public mkSiteKey(origin: string): string { return origins.mkSiteKey(this.originContext(), origin) }
-    public readSiteParam(site: unknown): string { return origins.readSiteParam(this.originContext(), site) }
-    public siteToOrig(site: string): string { return origins.siteToOrig(this.originContext(), site) }
-    private safeDecode(value: string): string { return origins.safeDecode(this.originContext(), value) }
-    private hasScheme(value: string): boolean { return origins.hasScheme(this.originContext(), value) }
-    private mkRouteSite(origin: string): string { return origins.mkRouteSite(this.originContext(), origin) }
-    private mkDlUrl(args: { srvBaseUrl: string; origin: string }): string { return origins.mkDlUrl(this.originContext(), args) }
+    public mkSiteKey(origin: string): string {
+        return origins.mkSiteKey(this.originContext(), origin)
+    }
+
+    public readSiteParam(site: unknown): string {
+        return origins.readSiteParam(this.originContext(), site)
+    }
+
+    public siteToOrig(site: string): string {
+        return origins.siteToOrig(this.originContext(), site)
+    }
+
+    private safeDecode(value: string): string {
+        return origins.safeDecode(this.originContext(), value)
+    }
+
+    private hasScheme(value: string): boolean {
+        return origins.hasScheme(this.originContext(), value)
+    }
+
+    private mkRouteSite(origin: string): string {
+        return origins.mkRouteSite(this.originContext(), origin)
+    }
+
+    private mkDlUrl(args: { srvBaseUrl: string; origin: string }): string {
+        return origins.mkDlUrl(this.originContext(), args)
+    }
 
     private async fetchKeyFile(url: string): Promise<string> {
         return await network.fetchKeyFile(this.networkContext(), url)
