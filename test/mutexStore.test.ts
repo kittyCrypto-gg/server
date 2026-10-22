@@ -96,8 +96,7 @@ test('store data, lock and corruption files remain owner-only', async () => {
 })
 
 test('security-critical stores fail closed without replacing corrupt state', async () => {
-    const parent = await root()
-    const dir = join(parent, 'security-state')
+    const dir = await root()
     const file = join(dir, 'security.json')
     await writeFile(file, '{this is not valid json')
     await chmod(file, 0o666)
