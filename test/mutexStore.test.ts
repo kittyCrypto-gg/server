@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'fs/promises'
+import { chmod, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'fs/promises'
 import { hostname, tmpdir } from 'os'
 import { join } from 'path'
 import { MutexJsonStore } from '../src/mutexStore'
@@ -96,10 +96,8 @@ test('store data, lock and corruption files remain owner-only', async () => {
 })
 
 test('security-critical stores fail closed without replacing corrupt state', async () => {
-    const parent = await root()
-    const dir = join(parent, 'security-state')
+    const dir = await root()
     const file = join(dir, 'security.json')
-    await mkdir(dir, { recursive: true, mode: 0o700 })
     await writeFile(file, '{this is not valid json')
     await chmod(file, 0o666)
 
